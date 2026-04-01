@@ -11,6 +11,7 @@
 #include "msgqueuethread.h"
 #include "ifeiqview.h"
 #include "asynwait.h"
+#include "history.h"
 using namespace std;
 
 class Post;
@@ -38,6 +39,9 @@ public:
     void setMyName(string name);
     void setView(IFeiqView* view){mView = view;}
     void sendImOnLine(const string& ip = "");
+    void sendAbsence(AbsenceStatus status);
+    AbsenceStatus myAbsenceStatus() const { return mMyAbsenceStatus; }
+    void setAutoReply(bool enable, const string& text);
     /**
      * @brief enableIntervalDetect 当接入路由，被禁止发送广播包时，
      * 启用间隔检测可每隔一段时间发送一次上线通知到指定网段，以实现检测。
@@ -46,11 +50,14 @@ public:
 
 public:
     FeiqModel &getModel();
+    History &getHistory() { return mHistory; }
+    void initHistory(const string& dbPath);
 
 private://trigers
     void onAnsEntry(shared_ptr<Post> post);
     void onBrEntry(shared_ptr<Post> post);
     void onBrExit(shared_ptr<Post> post);
+    void onBrAbsence(shared_ptr<Post> post);
     void onMsg(shared_ptr<Post> post);
     void onSendCheck(shared_ptr<Post> post);
     void onReadCheck(shared_ptr<Post> post);
@@ -69,12 +76,16 @@ private:
     FeiqCommu mCommu;
     vector<unique_ptr<RecvProtocol>> mRecvProtocols;
     FeiqModel mModel;
+    History mHistory;
     string mHost;
     string mName;
     MsgQueueThread<ViewEvent> mMsgThd;
     IFeiqView* mView;
     vector<string> mBroadcast;
     bool mStarted=false;
+    AbsenceStatus mMyAbsenceStatus = AbsenceStatus::Online;
+    bool mAutoReplyEnabled = false;
+    string mAutoReplyText;
     AsynWait mAsyncWait;//异步等待对方回包
 
     struct EnumClassHash

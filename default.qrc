@@ -98,5 +98,6 @@
         <file>res/face/95.gif</file>
         <file>res/face/96.gif</file>
         <file>res/face/page.bmp</file>
+        <file>res/style.qss</file>
     </qresource>
 </RCC>

@@ -1,8 +1,6 @@
 #ifndef FEIQWIN_H
 #define FEIQWIN_H
 
-#include "recvtextedit.h"
-#include "sendtextedit.h"
 #include "qsettings.h"
 #include "fellowlistwidget.h"
 #include "feiqlib/feiqmodel.h"
@@ -21,8 +19,6 @@ public:
     FeiqWin();
 
 public:
-    RecvTextEdit* recvTextEdit();
-    SendTextEdit* sendTextEdit();
     FellowListWidget* fellowListWidget();
     const FeiqModel* feiqModel();
     Settings* settings();

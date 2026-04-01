@@ -1,0 +1,406 @@
+/* ============================== */
+/*     飞秋 Mac 版统一样式表       */
+/* ============================== */
+
+/* === 全局 === */
+QWidget {
+    font-family: "PingFang SC", "Helvetica Neue", sans-serif;
+    font-size: 13px;
+}
+
+/* === 好友列表主窗口 === */
+QMainWindow {
+    background-color: #F5F5F5;
+}
+
+QMainWindow > QWidget#centralWidget {
+    background-color: #F5F5F5;
+}
+
+/* === 搜索栏 === */
+QWidget#searchBarWidget {
+    background-color: #EBEBEB;
+    border-bottom: 1px solid #D5D5D5;
+}
+
+QLineEdit {
+    border: 1px solid #D0D0D0;
+    border-radius: 14px;
+    padding: 4px 12px;
+    background-color: #FFFFFF;
+    font-size: 12px;
+    color: #333333;
+}
+
+QLineEdit:focus {
+    border-color: #4A90D9;
+}
+
+/* === 好友列表 === */
+QListWidget {
+    background-color: #FFFFFF;
+    border: none;
+    outline: none;
+    font-size: 13px;
+}
+
+QListWidget::item {
+    padding: 0px;
+    border-bottom: 1px solid #F0F0F0;
+    min-height: 56px;
+}
+
+QListWidget::item:selected {
+    background-color: #E3F2FD;
+}
+
+QListWidget::item:hover {
+    background-color: #F5F5F5;
+}
+
+/* === 好友列表项 Widget === */
+QWidget#fellowItemWidget {
+    background-color: transparent;
+}
+
+/* 未读消息角标 */
+QLabel#fellowUnreadBadge {
+    background-color: #FF3B30;
+    color: white;
+    border-radius: 11px;
+    font-size: 11px;
+    font-weight: bold;
+    padding: 0px 4px;
+    min-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
+}
+
+/* === 好友分组标题 === */
+QWidget#groupHeaderWidget {
+    background-color: #F5F5F5;
+    border-bottom: 1px solid #EBEBEB;
+}
+
+QLabel#groupHeaderLabel {
+    color: #888888;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+
+/* === 底部状态栏 === */
+QWidget#statusBarWidget {
+    background-color: #FAFAFA;
+    border-top: 1px solid #E0E0E0;
+}
+
+QLabel#statusOnlineLabel {
+    color: #888888;
+    font-size: 11px;
+}
+
+QLabel#statusUserLabel {
+    color: #AAAAAA;
+    font-size: 11px;
+}
+
+/* === 菜单栏 === */
+QMenuBar {
+    background-color: transparent;
+    font-size: 13px;
+}
+
+QMenuBar::item {
+    padding: 4px 10px;
+    background-color: transparent;
+}
+
+QMenuBar::item:selected {
+    background-color: #D5D5D5;
+    border-radius: 4px;
+}
+
+QMenu {
+    background-color: #FFFFFF;
+    border: 1px solid #D0D0D0;
+    border-radius: 6px;
+    padding: 4px 0px;
+}
+
+QMenu::item {
+    padding: 6px 24px;
+    font-size: 13px;
+}
+
+QMenu::item:selected {
+    background-color: #4A90D9;
+    color: #FFFFFF;
+}
+
+/* === 聊天窗口标题栏 === */
+QWidget#chatTitleBar {
+    background-color: #FAFAFA;
+    border-bottom: 1px solid #E0E0E0;
+}
+
+QLabel#chatTitleLabel {
+    font-size: 15px;
+    font-weight: bold;
+    color: #333333;
+}
+
+/* === 聊天窗口工具栏 === */
+QToolBar#chatToolBar {
+    background-color: #FAFAFA;
+    border-bottom: 1px solid #E8E8E8;
+    spacing: 2px;
+    padding: 2px 8px;
+}
+
+QToolBar#chatToolBar QToolButton {
+    padding: 4px 10px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #555555;
+}
+
+QToolBar#chatToolBar QToolButton:hover {
+    background-color: #E0E0E0;
+}
+
+QToolBar#chatToolBar QToolButton:pressed {
+    background-color: #D0D0D0;
+}
+
+/* === 消息显示区 === */
+QTextEdit#recvEdit {
+    background-color: #FFFFFF;
+    border: none;
+    padding: 8px;
+    font-size: 13px;
+    color: #333333;
+    line-height: 1.5;
+}
+
+/* === 输入区域 === */
+QWidget#inputContainer {
+    background-color: #FFFFFF;
+    border-top: 1px solid #E0E0E0;
+}
+
+QTextEdit#sendEdit {
+    background-color: #FFFFFF;
+    border: none;
+    padding: 8px;
+    font-size: 13px;
+    color: #333333;
+}
+
+QTextEdit#sendEdit:focus {
+    outline: none;
+}
+
+/* === 发送提示 === */
+QLabel#sendHintLabel {
+    font-size: 11px;
+    color: #999999;
+}
+
+/* === 发送按钮 === */
+QPushButton#sendBtn {
+    background-color: #4A90D9;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 4px 16px;
+}
+
+QPushButton#sendBtn:hover {
+    background-color: #3A7BC8;
+}
+
+QPushButton#sendBtn:pressed {
+    background-color: #2A6CB8;
+}
+
+/* === Splitter === */
+QSplitter#chatSplitter::handle {
+    background-color: #E0E0E0;
+    height: 1px;
+}
+
+/* === 文件管理对话框 === */
+QTableWidget {
+    background-color: #FFFFFF;
+    border: 1px solid #E0E0E0;
+    gridline-color: #F0F0F0;
+    font-size: 12px;
+}
+
+QTableWidget::item {
+    padding: 4px 8px;
+}
+
+QTableWidget::item:selected {
+    background-color: #E3F2FD;
+    color: #1565C0;
+}
+
+QHeaderView::section {
+    background-color: #FAFAFA;
+    border: none;
+    border-bottom: 1px solid #E0E0E0;
+    border-right: 1px solid #F0F0F0;
+    padding: 6px 8px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #666666;
+}
+
+/* === 通用按钮 === */
+QPushButton {
+    background-color: #F0F0F0;
+    color: #333333;
+    border: 1px solid #D0D0D0;
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-size: 12px;
+}
+
+QPushButton:hover {
+    background-color: #E5E5E5;
+}
+
+QPushButton:pressed {
+    background-color: #D5D5D5;
+}
+
+/* === 滚动条 === */
+QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background: #C0C0C0;
+    border-radius: 4px;
+    min-height: 30px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #A0A0A0;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+QScrollBar:horizontal {
+    background: transparent;
+    height: 8px;
+    margin: 0;
+}
+
+QScrollBar::handle:horizontal {
+    background: #C0C0C0;
+    border-radius: 4px;
+    min-width: 30px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: #A0A0A0;
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0;
+}
+
+/* === 设置对话框 === */
+QWidget#settingsTitleBar {
+    background-color: #FAFAFA;
+    border-bottom: 1px solid #E0E0E0;
+}
+
+QLabel#settingsTitleLabel {
+    font-size: 16px;
+    font-weight: bold;
+    color: #333333;
+}
+
+QLabel#settingsHintLabel {
+    font-size: 11px;
+    color: #999999;
+}
+
+QWidget#settingsBtnBar {
+    background-color: #FAFAFA;
+    border-top: 1px solid #E0E0E0;
+}
+
+QPushButton#settingsSaveBtn {
+    background-color: #4A90D9;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+QPushButton#settingsSaveBtn:hover {
+    background-color: #3A7BC8;
+}
+
+QTabWidget#settingsTabWidget::pane {
+    border: none;
+    background-color: #FFFFFF;
+}
+
+QTabWidget#settingsTabWidget > QTabBar::tab {
+    padding: 8px 16px;
+    font-size: 12px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #666666;
+}
+
+QTabWidget#settingsTabWidget > QTabBar::tab:selected {
+    color: #4A90D9;
+    border-bottom: 2px solid #4A90D9;
+}
+
+QGroupBox {
+    font-size: 13px;
+    font-weight: 500;
+    color: #555555;
+    border: 1px solid #E8E8E8;
+    border-radius: 6px;
+    margin-top: 12px;
+    padding-top: 8px;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 0 4px;
+    background-color: #FFFFFF;
+}
+
+QRadioButton {
+    font-size: 13px;
+    color: #444444;
+    spacing: 6px;
+}
+
+QCheckBox {
+    font-size: 13px;
+    color: #444444;
+    spacing: 6px;
+}

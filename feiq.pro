@@ -32,6 +32,9 @@ mac{
 
 SOURCES += main.cpp\
         mainwindow.cpp \
+    chatwindow.cpp \
+    fellowitemwidget.cpp \
+    settingsdialog.cpp \
     feiqlib/udpcommu.cpp \
     feiqlib/feiqcommu.cpp \
     feiqlib/feiqengine.cpp \
@@ -62,6 +65,9 @@ SOURCES += main.cpp\
 
 
 HEADERS  += mainwindow.h \
+    chatwindow.h \
+    fellowitemwidget.h \
+    settingsdialog.h \
     feiqlib/ipmsg.h \
     feiqlib/udpcommu.h \
     feiqlib/feiqcommu.h \

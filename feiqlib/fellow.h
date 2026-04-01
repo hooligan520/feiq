@@ -6,6 +6,13 @@
 #include <sstream>
 using namespace std;
 
+enum class AbsenceStatus {
+    Online = 0,     // 在线
+    Away = 1,       // 离开
+    Busy = 2,       // 忙碌
+    Offline = 3     // 离线
+};
+
 class Fellow
 {
 public:
@@ -15,6 +22,7 @@ public:
     string getMac() const{return mMac;}
     bool isOnLine() const{return mOnLine;}
     string version() const{return mVersion;}
+    AbsenceStatus absenceStatus() const{return mAbsenceStatus;}
 
     void setIp(const string& value){
         mIp = value;
@@ -34,6 +42,8 @@ public:
 
     void setOnLine(bool value){
         mOnLine = value;
+        if (!value) mAbsenceStatus = AbsenceStatus::Offline;
+        else if (mAbsenceStatus == AbsenceStatus::Offline) mAbsenceStatus = AbsenceStatus::Online;
     }
 
     void setVersion(const string& value){
@@ -42,6 +52,14 @@ public:
 
     void setPcName(const string& value){
         mPcName = value;
+    }
+
+    void setAbsenceStatus(AbsenceStatus status){
+        mAbsenceStatus = status;
+        if (status == AbsenceStatus::Offline)
+            mOnLine = false;
+        else
+            mOnLine = true;
     }
 
     bool update(const Fellow& fellow)
@@ -60,6 +78,11 @@ public:
 
         if (mOnLine != fellow.mOnLine){
             mOnLine = fellow.mOnLine;
+            changed=true;
+        }
+
+        if (mAbsenceStatus != fellow.mAbsenceStatus){
+            mAbsenceStatus = fellow.mAbsenceStatus;
             changed=true;
         }
 
@@ -86,9 +109,21 @@ public:
         <<",pcname="<<mPcName
         <<",mac="<<mMac
         <<",online="<<mOnLine
+        <<",absence="<<static_cast<int>(mAbsenceStatus)
         <<",version="<<mVersion
         <<"]";
         return os.str();
+    }
+
+    static string absenceStatusStr(AbsenceStatus status)
+    {
+        switch (status) {
+        case AbsenceStatus::Online: return "在线";
+        case AbsenceStatus::Away: return "离开";
+        case AbsenceStatus::Busy: return "忙碌";
+        case AbsenceStatus::Offline: return "离线";
+        }
+        return "未知";
     }
 
 private:
@@ -97,8 +132,9 @@ private:
     string mName;
     string mHost;
     string mMac;
-    bool mOnLine;
+    bool mOnLine = false;
     string mVersion;
+    AbsenceStatus mAbsenceStatus = AbsenceStatus::Online;
 };
 
 #endif // FELLOW_H

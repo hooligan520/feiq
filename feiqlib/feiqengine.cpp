@@ -50,6 +50,19 @@ public:
     void write(ostream &os) override {(void)os;}
 };
 
+class SendAutoReplyContent : public ContentSender
+{
+public:
+    SendAutoReplyContent(const string& text):mText(text){}
+    int cmdId() override{return IPMSG_SENDMSG|IPMSG_SENDCHECKOPT|IPMSG_AUTORETOPT;}
+    void write(ostream& os) override
+    {
+        os<<encOut->convert(mText);
+    }
+private:
+    string mText;
+};
+
 class SendFileContent : public ContentSender
 {
 public:
@@ -100,6 +113,25 @@ public:
     }
 private:
     string mName;
+};
+
+class SendAbsence : public SendProtocol
+{
+public:
+    SendAbsence(const string& name, AbsenceStatus status):mName(name), mStatus(status){}
+    int cmdId() override {
+        int cmd = IPMSG_BR_ABSENCE;
+        if (mStatus != AbsenceStatus::Online)
+            cmd |= IPMSG_ABSENCEOPT;
+        return cmd;
+    }
+    void write(ostream &os) override
+    {
+        os<<encOut->convert(mName);
+    }
+private:
+    string mName;
+    AbsenceStatus mStatus;
 };
 
 /**
@@ -213,6 +245,37 @@ public:
         if (IS_CMD_SET(post->cmdId, IPMSG_BR_EXIT))
         {
             post->from->setOnLine(false);
+            trigger(post);
+            return true;
+        }
+        return false;
+    }
+};
+
+/**
+ * @brief The RecvBrAbsence class 好友状态变更（离开/忙碌/恢复）
+ */
+class RecvBrAbsence : public RecvProtocol
+{
+    DECLARE_TRIGGER(RecvBrAbsence)
+public:
+    bool read(shared_ptr<Post> post)
+    {
+        if (IS_CMD_SET(post->cmdId, IPMSG_BR_ABSENCE))
+        {
+            post->from->setName(toString(encIn->convert(post->extra)));
+            if (IS_OPT_SET(post->cmdId, IPMSG_ABSENCEOPT))
+            {
+                // 有 ABSENCEOPT 标志表示离线状态（离开或忙碌）
+                // 飞秋扩展中离开和忙碌通过附加内容区分
+                post->from->setAbsenceStatus(AbsenceStatus::Away);
+            }
+            else
+            {
+                // 没有 ABSENCEOPT 标志表示恢复在线
+                post->from->setAbsenceStatus(AbsenceStatus::Online);
+            }
+            post->from->setOnLine(true);
             trigger(post);
             return true;
         }
@@ -480,6 +543,7 @@ FeiqEngine::FeiqEngine()
     ADD_RECV_PROTOCOL3(RecvAnsEntry);
     ADD_RECV_PROTOCOL(RecvBrEntry, onBrEntry);
     ADD_RECV_PROTOCOL3(RecvBrExit);
+    ADD_RECV_PROTOCOL(RecvBrAbsence, onBrAbsence);
     ADD_RECV_PROTOCOL(RecvSendCheck, onSendCheck);
     ADD_RECV_PROTOCOL(RecvReadCheck, onReadCheck);
     ADD_RECV_PROTOCOL(RecvReadMessage, onReadMessage);//好友回复消息已经阅读
@@ -519,6 +583,31 @@ pair<bool, string> FeiqEngine::send(shared_ptr<Fellow> fellow, shared_ptr<Conten
     }
 
     content->setPacketNo(ret.first);
+
+    // 记录发送的消息到聊天记录
+    {
+        string contentText;
+        int contentType = static_cast<int>(content->type());
+        switch (content->type())
+        {
+        case ContentType::Text:
+            contentText = static_cast<TextContent*>(content.get())->text;
+            break;
+        case ContentType::File:
+            contentText = static_cast<FileContent*>(content.get())->filename;
+            break;
+        case ContentType::Knock:
+            contentText = "[窗口抖动]";
+            break;
+        default:
+            contentText = "";
+            break;
+        }
+        auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        mHistory.addRecord(fellow->getIp(), fellow->getName(), fellow->getMac(),
+                          now, true, contentType, contentText);
+    }
 
     if (content->type() == ContentType::File){
         auto ptr = dynamic_pointer_cast<FileContent>(content);
@@ -690,6 +779,12 @@ void FeiqEngine::setMyName(string name){
         mName = mHost;
 }
 
+void FeiqEngine::setAutoReply(bool enable, const string& text)
+{
+    mAutoReplyEnabled = enable;
+    mAutoReplyText = text;
+}
+
 void FeiqEngine::sendImOnLine(const string &ip)
 {
     SendImOnLine imOnLine(mName);
@@ -703,6 +798,14 @@ void FeiqEngine::sendImOnLine(const string &ip)
     {
         mCommu.send(ip, imOnLine);
     }
+}
+
+void FeiqEngine::sendAbsence(AbsenceStatus status)
+{
+    mMyAbsenceStatus = status;
+    SendAbsence absence(mName, status);
+    mCommu.send("255.255.255.255", absence);
+    broadcastToCurstomGroup(absence);
 }
 
 void FeiqEngine::enableIntervalDetect(int seconds)
@@ -726,10 +829,25 @@ FeiqModel &FeiqEngine::getModel()
     return mModel;
 }
 
+void FeiqEngine::initHistory(const string& dbPath)
+{
+    if (!mHistory.init(dbPath))
+    {
+        cerr<<"Failed to init history at: "<<dbPath<<endl;
+    }
+}
+
 void FeiqEngine::onBrEntry(shared_ptr<Post> post)
 {
     AnsBrEntry ans(mName);
     mCommu.send(post->from->getIp(), ans);
+}
+
+void FeiqEngine::onBrAbsence(shared_ptr<Post> post)
+{
+    // 好友状态变更，更新好友信息并通知 UI
+    // addOrUpdateFellow 已经在宏中调用了
+    (void)post;
 }
 
 void FeiqEngine::onMsg(shared_ptr<Post> post)
@@ -798,7 +916,43 @@ void FeiqEngine::onMsg(shared_ptr<Post> post)
     }
 
     if (!event->contents.empty())
+    {
+        // 记录收到的消息到聊天记录
+        for (auto& c : event->contents)
+        {
+            string contentText;
+            int contentType = static_cast<int>(c->type());
+            switch (c->type())
+            {
+            case ContentType::Text:
+                contentText = static_cast<TextContent*>(c.get())->text;
+                break;
+            case ContentType::File:
+                contentText = static_cast<FileContent*>(c.get())->filename;
+                break;
+            case ContentType::Knock:
+                contentText = "[窗口抖动]";
+                break;
+            default:
+                contentText = "";
+                break;
+            }
+            auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            mHistory.addRecord(post->from->getIp(), post->from->getName(), post->from->getMac(),
+                              now, false, contentType, contentText);
+        }
         mMsgThd.sendMessage(event);
+    }
+
+    // 自动应答：收到普通文本消息时自动回复
+    // 检查消息不是自动回复或广播（防死循环）
+    if (mAutoReplyEnabled && !mAutoReplyText.empty()
+        && !IS_OPT_SET(post->cmdId, IPMSG_NO_REPLY_OPTS))
+    {
+        SendAutoReplyContent autoReply(mAutoReplyText);
+        mCommu.send(post->from->getIp(), autoReply);
+    }
 }
 
 void FeiqEngine::onSendCheck(shared_ptr<Post> post)

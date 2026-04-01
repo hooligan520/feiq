@@ -61,14 +61,19 @@ bool History::init(const string &dbPath)
     //创建表
     if (needCreateTable)
     {
-        string createFellowTable = "create table " FELLOW_TABLE "(id integer,ip text, name text, mac text, primary key(id));";
-        string createMessageTable = "create table " MESSAGE_TABLE " (id integer, fellow integer, when integer, content blob, primary key(id))";
+        string createFellowTable = "create table " FELLOW_TABLE "(id integer primary key autoincrement, ip text, name text, mac text);";
+        string createMessageTable = "create table " MESSAGE_TABLE " (id integer primary key autoincrement, fellow integer, time integer, is_self integer, content_type integer, content_text text)";
 
         ret = sqlite3_exec(mDb, createFellowTable.c_str(), nullptr, nullptr, nullptr);
         CHECK_SQLITE_RET(ret, "create fellow table", false);
 
         ret = sqlite3_exec(mDb, createMessageTable.c_str(), nullptr, nullptr, nullptr);
         CHECK_SQLITE_RET(ret, "create message table", false);
+    }
+    else
+    {
+        // 检查是否需要迁移旧表结构
+        migrateIfNeeded();
     }
 
     success=true;
@@ -84,116 +89,213 @@ void History::unInit()
     }
 }
 
-void History::add(const HistoryRecord& record)
+void History::migrateIfNeeded()
 {
-    int ret;
+    // 检查 message 表是否有 is_self 列（新结构）
+    string sql = "PRAGMA table_info(" MESSAGE_TABLE ")";
+    sqlite3_stmt* stmt = nullptr;
+    auto ret = sqlite3_prepare_v2(mDb, sql.c_str(), sql.length(), &stmt, nullptr);
+    if (ret != SQLITE_OK) return;
 
-    //先更新好友信息
-    auto fellowId =  findFellowId(record.who->getIp());
+    bool hasIsSelf = false;
+    while (sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        const char* colName = (const char*)sqlite3_column_text(stmt, 1);
+        if (colName && string(colName) == "is_self")
+        {
+            hasIsSelf = true;
+            break;
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    if (!hasIsSelf)
+    {
+        // 旧表结构，需要重建
+        // 先删除旧表（旧表数据兼容性差，直接重建）
+        sqlite3_exec(mDb, "DROP TABLE IF EXISTS " MESSAGE_TABLE, nullptr, nullptr, nullptr);
+        string createMessageTable = "create table " MESSAGE_TABLE " (id integer primary key autoincrement, fellow integer, time integer, is_self integer, content_type integer, content_text text)";
+        sqlite3_exec(mDb, createMessageTable.c_str(), nullptr, nullptr, nullptr);
+        cout<<"History: migrated message table to new schema"<<endl;
+    }
+}
+
+void History::addRecord(const string& fellowIp, const string& fellowName, const string& fellowMac,
+                        long long timestamp, bool isSelf, int contentType, const string& contentText)
+{
+    if (mDb == nullptr) return;
+
+    int fellowId = findFellowId(fellowIp);
     if (fellowId < 0)
     {
-        string sql = "insert into " FELLOW_TABLE " values(null,"
-                +record.who->getIp()
-                +","+record.who->getName()
-                +","+record.who->getMac()
-                +");";
-        ret = sqlite3_exec(mDb, sql.c_str(), nullptr, nullptr, nullptr);
-        CHECK_SQLITE_RET2(ret, "insert fellow to db");
-
-        fellowId = findFellowId(record.who->getIp());
-    }
-
-    //再增加记录
-    Parcel parcel;
-    record.what->writeTo(parcel);
-    string sql = "insert into " MESSAGE_TABLE "values(null,"
-            +to_string(fellowId)
-            +","+ to_string(record.when.time_since_epoch().count())
-            +",?);";
-
-    sqlite3_stmt* stmt = nullptr;
-    ret = sqlite3_prepare_v2(mDb, sql.c_str(), sql.length(), &stmt, nullptr);
-    CHECK_SQLITE_RET2(ret, "prepare to insert message");
-
-    Defer finalizeStmt{
-        [stmt](){
+        // 插入新好友
+        string sql = "INSERT INTO " FELLOW_TABLE " (ip, name, mac) VALUES (?, ?, ?)";
+        sqlite3_stmt* stmt = nullptr;
+        auto ret = sqlite3_prepare_v2(mDb, sql.c_str(), sql.length(), &stmt, nullptr);
+        if (ret == SQLITE_OK)
+        {
+            sqlite3_bind_text(stmt, 1, fellowIp.c_str(), fellowIp.length(), SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 2, fellowName.c_str(), fellowName.length(), SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 3, fellowMac.c_str(), fellowMac.length(), SQLITE_TRANSIENT);
+            sqlite3_step(stmt);
             sqlite3_finalize(stmt);
         }
-    };
+        fellowId = findFellowId(fellowIp);
+    }
+    else
+    {
+        // 更新好友名称
+        string sql = "UPDATE " FELLOW_TABLE " SET name = ? WHERE id = ?";
+        sqlite3_stmt* stmt = nullptr;
+        auto ret = sqlite3_prepare_v2(mDb, sql.c_str(), sql.length(), &stmt, nullptr);
+        if (ret == SQLITE_OK)
+        {
+            sqlite3_bind_text(stmt, 1, fellowName.c_str(), fellowName.length(), SQLITE_TRANSIENT);
+            sqlite3_bind_int(stmt, 2, fellowId);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+    }
 
-    auto buf = parcel.raw();
-    ret = sqlite3_bind_blob(stmt, 1, buf.data(), buf.size(), nullptr);
-    CHECK_SQLITE_RET2(ret, "bind content to blob");
+    if (fellowId < 0) return;
 
-    ret = sqlite3_step(stmt);
-    CHECK_SQLITE_RET2(ret, "insert message");
+    // 插入消息记录
+    string sql = "INSERT INTO " MESSAGE_TABLE " (fellow, time, is_self, content_type, content_text) VALUES (?, ?, ?, ?, ?)";
+    sqlite3_stmt* stmt = nullptr;
+    auto ret = sqlite3_prepare_v2(mDb, sql.c_str(), sql.length(), &stmt, nullptr);
+    if (ret == SQLITE_OK)
+    {
+        sqlite3_bind_int(stmt, 1, fellowId);
+        sqlite3_bind_int64(stmt, 2, timestamp);
+        sqlite3_bind_int(stmt, 3, isSelf ? 1 : 0);
+        sqlite3_bind_int(stmt, 4, contentType);
+        sqlite3_bind_text(stmt, 5, contentText.c_str(), contentText.length(), SQLITE_TRANSIENT);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+}
+
+vector<SimpleHistoryRecord> History::queryByIp(const string& fellowIp, int limit)
+{
+    vector<SimpleHistoryRecord> result;
+    if (mDb == nullptr) return result;
+
+    int fellowId = findFellowId(fellowIp);
+    if (fellowId < 0) return result;
+
+    string sql = "SELECT time, is_self, content_type, content_text FROM " MESSAGE_TABLE
+                 " WHERE fellow = ? ORDER BY time DESC LIMIT ?";
+    sqlite3_stmt* stmt = nullptr;
+    auto ret = sqlite3_prepare_v2(mDb, sql.c_str(), sql.length(), &stmt, nullptr);
+    if (ret != SQLITE_OK) return result;
+
+    sqlite3_bind_int(stmt, 1, fellowId);
+    sqlite3_bind_int(stmt, 2, limit);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        SimpleHistoryRecord record;
+        record.timestamp = sqlite3_column_int64(stmt, 0);
+        record.isSelf = sqlite3_column_int(stmt, 1) != 0;
+        record.contentType = sqlite3_column_int(stmt, 2);
+        const char* text = (const char*)sqlite3_column_text(stmt, 3);
+        record.contentText = text ? text : "";
+        result.push_back(record);
+    }
+    sqlite3_finalize(stmt);
+
+    // 结果是逆序的（最新在前），反转为正序
+    std::reverse(result.begin(), result.end());
+    return result;
+}
+
+// 旧接口保留兼容
+void History::add(const HistoryRecord& record)
+{
+    if (mDb == nullptr || record.who == nullptr || record.what == nullptr) return;
+
+    string contentText;
+    int contentType = static_cast<int>(record.what->type());
+
+    switch (record.what->type())
+    {
+    case ContentType::Text:
+    {
+        auto tc = static_cast<TextContent*>(record.what.get());
+        contentText = tc->text;
+        break;
+    }
+    case ContentType::File:
+    {
+        auto fc = static_cast<FileContent*>(record.what.get());
+        contentText = fc->filename;
+        break;
+    }
+    case ContentType::Knock:
+        contentText = "[窗口抖动]";
+        break;
+    default:
+        contentText = "[不支持的内容]";
+        break;
+    }
+
+    addRecord(record.who->getIp(), record.who->getName(), record.who->getMac(),
+              record.when.time_since_epoch().count(), false, contentType, contentText);
 }
 
 vector<HistoryRecord> History::query(const string& selection, const vector<string>& args)
 {
     vector<HistoryRecord> result;
-
-    sqlite3_stmt* stmt;
-    string sql = "select * from " MESSAGE_TABLE " where "+selection;
-    auto ret = sqlite3_prepare_v2(mDb, sql.c_str(), sql.length(), &stmt, nullptr);
-    CHECK_SQLITE_RET(ret, "prepare to query", result);
-
-    Defer finalizeStmt{
-        [stmt](){
-            sqlite3_finalize(stmt);
-        }
-    };
-
-    int len = args.size();
-    for (auto i = 0; i < len; i++)
-    {
-        ret = sqlite3_bind_blob(stmt, i+1, args[i].c_str(), args[i].length(), nullptr);
-        CHECK_SQLITE_RET(ret, "bind args", result);
-    }
-
-    while(true)
-    {
-        ret = sqlite3_step(stmt);
-        if (ret == SQLITE_DONE)
-        {
-            return result;
-        }
-        else if (ret != SQLITE_ROW)
-        {
-            cerr<<"error occur while step query:"<<ret<<endl;
-            return result;
-        }
-        else
-        {
-            auto fellowId = sqlite3_column_int(stmt, 1);
-            auto when = sqlite3_column_int(stmt, 2);
-            auto contentData = sqlite3_column_blob(stmt, 3);
-            auto contentLen = sqlite3_column_bytes(stmt, 3);
-
-            HistoryRecord record;
-            auto fellow = getFellow(fellowId);
-            record.who = shared_ptr<Fellow>(std::move(fellow));
-            record.when = time_point<steady_clock, milliseconds>(milliseconds(when));
-
-            Parcel parcel;
-            parcel.fillWith(contentData, contentLen);
-            parcel.resetForRead();
-            record.what = ContentParcelFactory::createFromParcel(parcel);
-
-            result.push_back(record);
-        }
-    }
-
+    // 旧接口保留但返回空，新代码使用 queryByIp
+    (void)selection;
+    (void)args;
     return result;
 }
 
 unique_ptr<Fellow> History::getFellow(int id)
 {
+    if (mDb == nullptr) return nullptr;
 
+    string sql = "SELECT ip, name, mac FROM " FELLOW_TABLE " WHERE id = ?";
+    sqlite3_stmt* stmt = nullptr;
+    auto ret = sqlite3_prepare_v2(mDb, sql.c_str(), sql.length(), &stmt, nullptr);
+    if (ret != SQLITE_OK) return nullptr;
+
+    sqlite3_bind_int(stmt, 1, id);
+
+    unique_ptr<Fellow> fellow;
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        fellow = unique_ptr<Fellow>(new Fellow());
+        const char* ip = (const char*)sqlite3_column_text(stmt, 0);
+        const char* name = (const char*)sqlite3_column_text(stmt, 1);
+        const char* mac = (const char*)sqlite3_column_text(stmt, 2);
+        if (ip) fellow->setIp(ip);
+        if (name) fellow->setName(name);
+        if (mac) fellow->setMac(mac);
+    }
+
+    sqlite3_finalize(stmt);
+    return fellow;
 }
 
 int History::findFellowId(const string &ip)
 {
+    if (mDb == nullptr) return -1;
 
+    string sql = "SELECT id FROM " FELLOW_TABLE " WHERE ip = ?";
+    sqlite3_stmt* stmt = nullptr;
+    auto ret = sqlite3_prepare_v2(mDb, sql.c_str(), sql.length(), &stmt, nullptr);
+    if (ret != SQLITE_OK) return -1;
+
+    sqlite3_bind_text(stmt, 1, ip.c_str(), ip.length(), SQLITE_TRANSIENT);
+
+    int fellowId = -1;
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        fellowId = sqlite3_column_int(stmt, 0);
+    }
+
+    sqlite3_finalize(stmt);
+    return fellowId;
 }
-

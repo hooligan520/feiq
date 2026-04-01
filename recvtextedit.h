@@ -32,15 +32,18 @@ signals:
 private:
     QString timeStr(long long msSinceEpoch);
     void addContent(const Content* content, long long msSinceEpoch, bool mySelf);
-    void showHint(long long msSinceEpoch, bool mySelf);
-    void showContent(const Content* content, bool mySelf);
-    void showFile(const FileContent* content, bool fromMySelf);
-    void showImage(const ImageContent* content);
-    void showText(const TextContent* content);
-    void showKnock(const KnockContent* content, bool mySelf);
-    void showUnSupport(const QString &text = "");
+    void showTimestamp(long long msSinceEpoch);
+    void showBubble(const Content* content, long long msSinceEpoch, bool mySelf);
+
+    // 内容渲染为 HTML
+    QString contentToHtml(const Content* content, bool mySelf);
+    QString fileToHtml(const FileContent* content, bool fromMySelf);
+    QString imageToHtml(const ImageContent* content);
+    QString textToHtml(const TextContent* content);
+    QString knockToHtml(const KnockContent* content, bool mySelf);
+    QString unsupportToHtml(const QString &text = "");
+
     void drawDaySeperatorIfNewDay(long long sinceEpoch);
-    QString textHtmlStr(const TextContent* content);
     void parseLink(const QString& link);
 
 private:

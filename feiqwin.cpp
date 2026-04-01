@@ -7,16 +7,6 @@ FeiqWin::FeiqWin()
 
 }
 
-RecvTextEdit *FeiqWin::recvTextEdit()
-{
-    return mMainWin->mRecvTextEdit;
-}
-
-SendTextEdit *FeiqWin::sendTextEdit()
-{
-    return mMainWin->mSendTextEdit;
-}
-
 FellowListWidget *FeiqWin::fellowListWidget()
 {
     return &(mMainWin->mFellowList);

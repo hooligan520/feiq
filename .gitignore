@@ -36,3 +36,14 @@ Makefile*
 # QtCtreator CMake
 CMakeLists.txt.user
 
+# macOS
+.DS_Store
+
+# Build output
+feiq.app/
+moc_predefs.h
+
+# WorkBuddy
+.workbuddy/
+
+

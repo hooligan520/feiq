@@ -4,14 +4,12 @@
 #include <QMainWindow>
 #include "fellowlistwidget.h"
 #include "searchfellowdlg.h"
-#include "recvtextedit.h"
 #include "feiqlib/feiqengine.h"
 #include "filemanagerdlg.h"
 #include "settings.h"
 #include <unordered_map>
-#include "chooseemojidlg.h"
 #include <QFileInfo>
-#include "sendtextedit.h"
+#include <QActionGroup>
 
 using namespace std;
 
@@ -20,6 +18,7 @@ class MainWindow;
 }
 
 class FeiqWin;
+class ChatWindow;
 
 struct UnshownMessage
 {
@@ -40,18 +39,20 @@ class MainWindow : public QMainWindow, IFeiqView
     Q_OBJECT
 
     friend class FeiqWin;
+    friend class ChatWindow;
 public:
     explicit MainWindow(QWidget *parent = 0);
     ~MainWindow();
 
     void setFeiqWin(FeiqWin* feiqWin);
 
+    FeiqEngine& getEngine() { return mFeiq; }
+    Settings* getSettings() { return mSettings; }
+    FileManagerDlg* getFileManagerDlg() { return mDownloadFileDlg; }
+
 public slots:
     void onNotifyClicked(const QString& fellowIp);
     void onNotifyReplied(long notifyId, const QString& fellowIp, const QString& reply);
-
-protected:
-    void enterEvent(QEvent *event);
 
 signals:
     void showErrorAndQuit(const QString& text);
@@ -65,28 +66,26 @@ private slots:
     void openSearchDlg();
     void openDownloadDlg();
     void onShowErrorAndQuit(const QString& text);
-    void navigateToFileTask(IdType packetNo, IdType fileId, bool upload);
-    void sendKnock();
-    void sendText();
     void openChartTo(const Fellow* fellow);
     void handleFeiqViewEvent(shared_ptr<ViewEvent> event);
     void refreshFellowList();
     void addFellow();
-    void openChooseEmojiDlg();
-    void sendFile();
-    void sendFile(string filepath);
-    void sendFiles(QList<QFileInfo> files);
+    void onChatWindowClosed(const Fellow* fellow);
+    void setMyStatus(AbsenceStatus status);
+    void openPlugins();
 
 private:
     void userAddFellow(QString ip);
     long showNotification(const Fellow* fellow, const QString& text);
-    shared_ptr<Fellow> checkCurFellow();
-    void showResult(pair<bool, string> ret, const Content *content);
     vector<const Fellow*> fellowSearchDriver(const QString& text);
     void initFeiq();
-    void readEvent(const ViewEvent* event);
     void setBadgeNumber(int number);
     QString simpleTextOf(const Content* content);
+
+    ChatWindow* findOrCreateChatWindow(const Fellow* fellow);
+    ChatWindow* findChatWindow(const Fellow* fellow);
+    void updateStatusBar();
+    QString getLocalIp();
 
     UnshownMessage& addUnshownMessage(const Fellow *fellow, shared_ptr<ViewEvent> event);
     UnshownMessage *findUnshownMessage(int id);
@@ -109,14 +108,14 @@ private:
     FellowListWidget mFellowList;
     SearchFellowDlg* mSearchFellowDlg;
     FileManagerDlg* mDownloadFileDlg;
-    ChooseEmojiDlg* mChooseEmojiDlg;
     Settings* mSettings;
     FeiqEngine mFeiq;
-    RecvTextEdit* mRecvTextEdit;
-    SendTextEdit* mSendTextEdit;
     QString mTitle;
     unordered_map<const Fellow*, list<UnshownMessage>> mUnshownEvents;
     FeiqWin* mFeiqWin = nullptr;
+
+    // 聊天窗口管理
+    unordered_map<const Fellow*, ChatWindow*> mChatWindows;
 };
 
 #endif // MAINWINDOW_H

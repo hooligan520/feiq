@@ -4,6 +4,7 @@
 #include "fellow.h"
 #include <memory>
 #include <vector>
+#include <algorithm>
 #include "content.h"
 #include "post.h"
 #include <sqlite3.h>
@@ -17,16 +18,16 @@ struct HistoryRecord{
     shared_ptr<Content> what;
 };
 
-//日志记录
-    //完成代码
-    //调试代码
-    //加入model，合并model功能
-    //加入engine自动记录
-    //按好友、日期查询最近记录
-    //更新文件path
+// 简化的历史记录（用于 UI 显示）
+struct SimpleHistoryRecord {
+    long long timestamp;    // 毫秒级时间戳
+    bool isSelf;           // 是否是自己发的
+    int contentType;       // ContentType 枚举值
+    string contentText;    // 文本内容或文件名
+};
+
 /**
  * @brief The History class 以Content为单位，记录和查询聊天记录
- * 还只是个半成品~
  */
 class History
 {
@@ -38,11 +39,20 @@ public:
     void unInit();
 
 public:
+    // 新的简化接口
+    void addRecord(const string& fellowIp, const string& fellowName, const string& fellowMac,
+                   long long timestamp, bool isSelf, int contentType, const string& contentText);
+    vector<SimpleHistoryRecord> queryByIp(const string& fellowIp, int limit = 50);
+
+    // 旧接口保留兼容
     void add(const HistoryRecord &record);
     vector<HistoryRecord> query(const string& selection, const vector<string> &args);
+
 private:
     unique_ptr<Fellow> getFellow(int id);
     int findFellowId(const string& ip);
+    void migrateIfNeeded();
+
 private:
     sqlite3* mDb = nullptr;
 };
