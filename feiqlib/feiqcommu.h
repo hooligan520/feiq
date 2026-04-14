@@ -27,7 +27,7 @@ struct VersionInfo
 class FeiqCommu
 {
 public:
-    typedef function<void (unique_ptr<TcpSocket>, int packetNo, int fileId, int offset)> FileServerHandler;
+    typedef function<void (unique_ptr<TcpSocket>, int cmdId, int packetNo, int fileId, int offset)> FileServerHandler;
     FeiqCommu();
 
 public:
@@ -58,6 +58,14 @@ public:
      * @return 如果请求成功，返回tcp连接，据此获取数据，否则返回nullptr
      */
     unique_ptr<TcpSocket> requestFileData(const string& ip, const FileContent &file, int offset);
+
+    /**
+     * @brief packImageRequest 构造图片下载的TCP请求包
+     * @param packetNo 原始UDP包编号
+     * @param imageId 图片ID
+     * @return 打包后的请求数据
+     */
+    string packImageRequest(IdType packetNo, const string& imageId);
 
     /**
      * @brief setFileServerHandler 设置文件服务的处理

@@ -35,6 +35,7 @@ SOURCES += main.cpp\
     chatwindow.cpp \
     fellowitemwidget.cpp \
     settingsdialog.cpp \
+    broadcastdialog.cpp \
     feiqlib/udpcommu.cpp \
     feiqlib/feiqcommu.cpp \
     feiqlib/feiqengine.cpp \
@@ -68,6 +69,7 @@ HEADERS  += mainwindow.h \
     chatwindow.h \
     fellowitemwidget.h \
     settingsdialog.h \
+    broadcastdialog.h \
     feiqlib/ipmsg.h \
     feiqlib/udpcommu.h \
     feiqlib/feiqcommu.h \

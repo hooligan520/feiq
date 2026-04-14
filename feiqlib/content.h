@@ -103,7 +103,7 @@ public:
         file->filename = getFileNameFromPath(filePath);
         if (S_ISREG(fInfo.st_mode))
             file->fileType = IPMSG_FILE_REGULAR;
-        else if (S_ISREG(fInfo.st_mode))
+        else if (S_ISDIR(fInfo.st_mode))
             file->fileType = IPMSG_FILE_DIR;
         else
             return nullptr;//先不支持其他类型
@@ -124,7 +124,9 @@ class ImageContent: public Content
 {
 public:
     ImageContent(){mType = ContentType::Image;}
-    string id;
+    string id;         // 原始8字节ID（兼容旧代码）
+    string imageId;    // 用于TCP下载的图片标识
+    string localPath;  // 本地图片文件路径（已下载后设置）
 };
 
 class ContentParcelFactory

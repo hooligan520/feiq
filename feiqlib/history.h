@@ -43,6 +43,16 @@ public:
     void addRecord(const string& fellowIp, const string& fellowName, const string& fellowMac,
                    long long timestamp, bool isSelf, int contentType, const string& contentText);
     vector<SimpleHistoryRecord> queryByIp(const string& fellowIp, int limit = 50);
+    vector<SimpleHistoryRecord> queryByIp(const string& fellowIp, int limit, int offset);
+
+    // 查询所有历史好友（ip, name），用于启动时展示离线好友
+    struct HistoryFellow {
+        string ip;
+        string name;
+        string mac;
+        long long lastMsgTime = 0; // 最后一条消息时间戳（毫秒）
+    };
+    vector<HistoryFellow> queryAllFellows();
 
     // 旧接口保留兼容
     void add(const HistoryRecord &record);
@@ -50,7 +60,7 @@ public:
 
 private:
     unique_ptr<Fellow> getFellow(int id);
-    int findFellowId(const string& ip);
+    int findFellowId(const string& ip, const string& mac = "");
     void migrateIfNeeded();
 
 private:

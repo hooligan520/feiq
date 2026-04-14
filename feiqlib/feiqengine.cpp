@@ -9,6 +9,14 @@
 #include <unistd.h>
 #include <iostream>
 #include <iomanip>
+#include <chrono>
+#include <thread>
+#include <sys/stat.h>
+#include <array>
+#include <dirent.h>
+#include <functional>
+#include <sstream>
+#include "logger.h"
 
 class ContentSender : public SendProtocol
 {
@@ -209,6 +217,7 @@ public:
         {
             auto converted = toString(encIn->convert(post->extra));
             post->from->setName(converted);
+            post->from->setOnLine(true);
             trigger(post);
             return true;
         }
@@ -227,6 +236,7 @@ public:
         if (IS_CMD_SET(post->cmdId, IPMSG_BR_ENTRY))
         {
             post->from->setName(toString(encIn->convert(post->extra)));
+            post->from->setOnLine(true);
             trigger(post);
             return true;
         }
@@ -328,7 +338,7 @@ public:
 };
 
 /**
- * @brief The RecvText class 接收文本消息
+ * @brief The RecvText class 接收文本消息（同时支持含内联图片的文本 0x78）
  */
 class RecvText : public RecvProtocol
 {
@@ -347,14 +357,60 @@ public:
         {
             string rawText;
             rawText.assign(begin, found);
+            string converted = encIn->convert(rawText);
 
-            auto content = createTextContent(encIn->convert(rawText));
+            // 检测文本中是否包含图片占位符 /~#>imageId<B~
+            // 将占位符替换为 \x01IMG:imageId\x01 标记，保持为单个 TextContent
+            string processed = replaceImgPlaceholders(converted);
+            auto content = createTextContent(processed);
             post->contents.push_back(shared_ptr<Content>(std::move(content)));
         }
 
         return false;
     }
 private:
+    // 将图片占位符 /~#>imageId<B~ 替换为特殊标记 \x01IMG:imageId\x01
+    // 保持消息为单个字符串，在 UI 层渲染时再转为 <img> 标签
+    string replaceImgPlaceholders(const string& text)
+    {
+        string result;
+        size_t pos = 0;
+        size_t len = text.size();
+
+        while (pos < len)
+        {
+            size_t imgStart = text.find("/~#>", pos);
+            if (imgStart == string::npos)
+            {
+                result += text.substr(pos);
+                break;
+            }
+
+            // 占位符前面的文字
+            result += text.substr(pos, imgStart - pos);
+
+            // 解析 imageId
+            size_t idStart = imgStart + 4;
+            size_t imgEnd = text.find("<B~", idStart);
+            if (imgEnd == string::npos)
+            {
+                // 格式不完整，保留原文
+                result += text.substr(imgStart);
+                break;
+            }
+
+            string imageId = text.substr(idStart, imgEnd - idStart);
+            pos = imgEnd + 3;
+
+            // 替换为特殊标记
+            result += "\x01IMG:" + imageId + "\x01";
+
+            FEIQ_LOG("[RecvText] 图片占位符替换: imageId=" << imageId);
+        }
+
+        return result;
+    }
+
     unique_ptr<TextContent> createTextContent(const string& raw)
     {
         auto content = unique_ptr<TextContent>(new TextContent());
@@ -434,19 +490,18 @@ class Debuger : public RecvProtocol
 public:
     bool read(shared_ptr<Post> post)
     {
-        cout<<"==========================="<<endl;
-        cout<<"cmd id : "<<std::hex<<post->cmdId<<endl;
-        cout<<"from: "<<post->from->toString()<<endl;
+        if (!Logger::instance().isEnabled()) return false;
+        std::ostringstream oss;
+        oss << "==========================="
+            << "\ncmd id : " << std::hex << post->cmdId
+            << "\nfrom: " << post->from->toString()
+            << "\n";
         int count = 0;
-
         for (unsigned char ch : post->extra){
-            cout<<setw(2)<<setfill('0')<<hex<<(unsigned int)ch<<" ";
-            if (++count >= 8){
-                cout<<endl;
-                count=0;
-            }
+            oss << std::setw(2) << std::setfill('0') << std::hex << (unsigned int)ch << " ";
+            if (++count >= 8){ oss << "\n"; count=0; }
         }
-        cout<<endl;
+        FEIQ_LOG(oss.str());
         return false;
     }
 };
@@ -470,22 +525,83 @@ public:
     }
 };
 
+// RecvImage: 处理 UDP 内联图片分片
+// 飞秋图片协议: Windows 飞秋将图片数据拆分成多个 UDP 包发送
+// extra 格式: imageId|seqNum|totalSize|width|height|chunkSize|...|flags#\0<图片二进制数据>
+// 每个 UDP 包都是独立的 IPMSG 包（cmdId = IPMSG_SENDIMAGE | IPMSG_FILEATTACHOPT）
+typedef std::function<void (shared_ptr<Post> post, const string& imageId,
+                           size_t totalSize, int width, int height,
+                           const char* chunkData, size_t chunkLen)> OnImageChunk;
+
 class RecvImage : public RecvProtocol
 {
 public:
+    RecvImage(OnImageChunk handler) : mHandler(handler) {}
+
     bool read(shared_ptr<Post> post)
     {
         if (IS_CMD_SET(post->cmdId, IPMSG_SENDIMAGE)
             && IS_OPT_SET(post->cmdId, IPMSG_FILEATTACHOPT))
         {
-            char id[9]={0};
-            memcpy(id, post->extra.data(), 8);
-            auto content = make_shared<ImageContent>();
-            content->id = id;
-            post->contents.push_back(content);
+            auto& extra = post->extra;
+            if (extra.empty()) return true; // 空 extra，丢弃
+
+            // 解析 extra: 用 '|' (HLIST_ENTRY_SEPARATOR) 分隔的元信息头，
+            // 后跟 '#' + '\0' + 二进制图片数据
+            // 格式: imageId|seqNum|totalSize|width|height|chunkSize|0|2|0|00000000#\0<data>
+
+            // 找到元信息头的结束位置（'#' 后跟 '\0'）
+            // 先找 \0 位置——它分隔元信息和二进制数据
+            auto zeroPos = find(extra.begin(), extra.end(), '\0');
+            if (zeroPos == extra.end()) return true; // 没有二进制数据
+
+            // 解析元信息头（\0 之前的部分）
+            string header(extra.begin(), zeroPos);
+
+            // 用 '|' 分割头部字段
+            vector<string> fields;
+            {
+                string field;
+                for (char ch : header) {
+                    if (ch == '|') {
+                        fields.push_back(field);
+                        field.clear();
+                    } else if (ch == '#') {
+                        fields.push_back(field);
+                        break;
+                    } else {
+                        field += ch;
+                    }
+                }
+                if (!field.empty()) fields.push_back(field);
+            }
+
+            // fields[0]=imageId, fields[1]=totalSize(十进制), fields[2]=offset
+            // fields[3]=totalChunks, fields[4]=chunkSeq, fields[5]=chunkSize
+            if (fields.size() < 2) return true;
+
+            string imageId = fields[0];
+
+            // 总大小（十进制）
+            size_t totalSize = 0;
+            try { totalSize = stoull(fields[1]); } catch (...) {}
+
+            // 二进制数据在 \0 后面
+            auto dataStart = zeroPos + 1;
+            size_t chunkLen = distance(dataStart, extra.end());
+
+            if (chunkLen > 0 && mHandler)
+            {
+                mHandler(post, imageId, totalSize, 0, 0,
+                        &(*dataStart), chunkLen);
+            }
+
+            return true; // 拦截！不让后续协议处理器（特别是 EndRecv/onMsg）处理
         }
         return false;
     }
+private:
+    OnImageChunk mHandler;
 };
 
 /**
@@ -548,7 +664,18 @@ FeiqEngine::FeiqEngine()
     ADD_RECV_PROTOCOL(RecvReadCheck, onReadCheck);
     ADD_RECV_PROTOCOL(RecvReadMessage, onReadMessage);//好友回复消息已经阅读
     ADD_RECV_PROTOCOL2(RecvText);
-    ADD_RECV_PROTOCOL2(RecvImage);
+    // RecvImage 手动注册，传入图片分片处理回调
+    {
+        RecvProtocol* p = new RecvImage([this](shared_ptr<Post> post,
+                const string& imageId, size_t totalSize, int width, int height,
+                const char* chunkData, size_t chunkLen){
+            post->from = this->addOrUpdateFellow(post->from);
+            this->handleImageChunk(imageId, totalSize, width, height,
+                                   chunkData, chunkLen, post->from);
+        });
+        mRecvProtocols.push_back(unique_ptr<RecvProtocol>(p));
+        mCommu.addRecvProtocol(p);
+    }
     ADD_RECV_PROTOCOL2(RecvKnock);
     ADD_RECV_PROTOCOL2(RecvFile);
     ADD_RECV_PROTOCOL(EndRecv, onMsg);
@@ -562,7 +689,8 @@ FeiqEngine::FeiqEngine()
                                           placeholders::_1,
                                           placeholders::_2,
                                           placeholders::_3,
-                                          placeholders::_4));
+                                          placeholders::_4,
+                                          placeholders::_5));
 }
 
 pair<bool, string> FeiqEngine::send(shared_ptr<Fellow> fellow, shared_ptr<Content> content)
@@ -637,6 +765,9 @@ bool FeiqEngine::downloadFile(FileTask* task)
 
     task->setObserver(mView);
 
+    if (task->getContent()->fileType == IPMSG_FILE_DIR)
+        return downloadDir(task);
+
     auto func = [task, this](){
         auto fellow = task->fellow();
         auto content = task->getContent();
@@ -704,6 +835,169 @@ bool FeiqEngine::downloadFile(FileTask* task)
 
         fclose(of);
         task->setProcess(total);
+        task->setState(FileTaskState::Finish);
+    };
+
+    thread thd(func);
+    thd.detach();
+
+    return task;
+}
+
+bool FeiqEngine::downloadDir(FileTask* task)
+{
+    task->setObserver(mView);
+
+    auto func = [task, this](){
+        auto fellow = task->fellow();
+        auto content = task->getContent();
+
+        auto client = mCommu.requestFileData(fellow->getIp(), *content, 0);
+        if (client == nullptr)
+        {
+            task->setState(FileTaskState::Error, "请求下载目录失败，可能好友已经取消");
+            return;
+        }
+
+        task->setState(FileTaskState::Running);
+
+        // 目录传输协议：循环读取 header，解析出文件/子目录/返回上级
+        // header格式: header-size:filename:file-size:fileattr:\a
+        // 其中 fileattr 的低位标识类型（IPMSG_FILE_REGULAR=1, IPMSG_FILE_DIR=2, IPMSG_FILE_RETPARENT=3）
+
+        string currentPath = content->path;
+        // 创建根目录
+        mkdir(currentPath.c_str(), 0755);
+
+        const int bufSize = 4096;
+        std::vector<char> buf(bufSize);
+        string headerBuf;
+        int totalRecv = 0;
+        bool done = false;
+        int depthCount = 1; // 进入根目录算1层
+
+        while (!done && depthCount > 0)
+        {
+            if (task->hasCancelPending())
+            {
+                task->setState(FileTaskState::Canceled);
+                return;
+            }
+
+            // 读取 header（以 \a 即 0x07 结尾）
+            headerBuf.clear();
+            bool gotHeader = false;
+            while (!gotHeader)
+            {
+                char c;
+                auto got = client->recv(&c, 1, 5000);
+                if (got <= 0)
+                {
+                    // 超时或错误，可能传输完成
+                    done = true;
+                    break;
+                }
+                if (c == FILELIST_SEPARATOR)
+                {
+                    gotHeader = true;
+                }
+                else
+                {
+                    headerBuf += c;
+                }
+            }
+
+            if (!gotHeader) break;
+
+            // 解析 header: headerSize:filename:fileSize:fileAttr[:extAttr...]
+            // 字段间以 ':' (0x3a) 分隔
+            std::vector<string> fields;
+            string field;
+            for (char c : headerBuf)
+            {
+                if (c == HLIST_ENTRY_SEPARATOR)
+                {
+                    fields.push_back(field);
+                    field.clear();
+                }
+                else
+                {
+                    field += c;
+                }
+            }
+            if (!field.empty())
+                fields.push_back(field);
+
+            if (fields.size() < 4) {
+                done = true;
+                break;
+            }
+
+            // string headerSizeStr = fields[0]; // 不需要
+            string filename = fields[1];
+            long long fileSize = 0;
+            try { fileSize = stoll(fields[2], nullptr, 16); } catch (...) {}
+            int fileAttr = 0;
+            try { fileAttr = stoi(fields[3], nullptr, 16); } catch (...) {}
+
+            int fileType = fileAttr & 0xFF; // 低8位是文件类型
+
+            if (fileType == IPMSG_FILE_DIR)
+            {
+                // 进入子目录
+                currentPath += "/" + filename;
+                mkdir(currentPath.c_str(), 0755);
+                depthCount++;
+            }
+            else if (fileType == IPMSG_FILE_RETPARENT)
+            {
+                // 返回上级目录
+                auto pos = currentPath.rfind('/');
+                if (pos != string::npos)
+                    currentPath = currentPath.substr(0, pos);
+                depthCount--;
+            }
+            else if (fileType == IPMSG_FILE_REGULAR)
+            {
+                // 普通文件，读取 fileSize 字节的数据
+                string filePath = currentPath + "/" + filename;
+                FILE* of = fopen(filePath.c_str(), "w+");
+                if (of == nullptr) continue;
+
+                long long recv = 0;
+                const int unitSize = 2048;
+                std::array<char, 2048> fileBuf;
+
+                while (recv < fileSize)
+                {
+                    if (task->hasCancelPending())
+                    {
+                        fclose(of);
+                        task->setState(FileTaskState::Canceled);
+                        return;
+                    }
+
+                    auto left = fileSize - recv;
+                    auto request = (long long)unitSize > left ? (int)left : unitSize;
+                    auto got = client->recv(fileBuf.data(), request, 5000);
+                    if (got <= 0)
+                    {
+                        fclose(of);
+                        task->setState(FileTaskState::Error, "下载目录中的文件超时");
+                        return;
+                    }
+                    fwrite(fileBuf.data(), 1, got, of);
+                    recv += got;
+                    totalRecv += got;
+                    task->setProcess(totalRecv);
+                }
+
+                fclose(of);
+            }
+            // 其他类型（symlink 等）跳过
+        }
+
+        task->setProcess(totalRecv);
         task->setState(FileTaskState::Finish);
     };
 
@@ -850,6 +1144,177 @@ void FeiqEngine::onBrAbsence(shared_ptr<Post> post)
     (void)post;
 }
 
+void FeiqEngine::handleImageChunk(const string& imageId, size_t totalSize,
+                                  int /*width*/, int /*height*/,
+                                  const char* chunkData, size_t chunkLen,
+                                  shared_ptr<Fellow> from)
+{
+    ImageChunkInfo completedInfo;
+    bool completed = false;
+
+    {
+        lock_guard<mutex> lock(mImageChunkMutex);
+
+        // 如果这个 imageId 已经完成过，忽略重传包
+        if (mCompletedImageIds.count(imageId)) {
+            return;
+        }
+
+        auto& info = mImageChunks[imageId];
+        if (info.imageId.empty()) {
+            // 第一个分片
+            info.imageId = imageId;
+            info.totalSize = totalSize;
+            info.from = from;
+            if (totalSize > 0) info.data.reserve(totalSize);
+            FEIQ_LOG("[ImageRecv] 新图片开始接收: id=" << imageId
+                 << " totalSize=" << totalSize);
+        }
+
+        // 更新最后收到 chunk 的时间
+        info.lastChunkTime = chrono::duration_cast<chrono::milliseconds>(
+            chrono::system_clock::now().time_since_epoch()).count();
+
+        // 追加分片数据
+        info.data.insert(info.data.end(), chunkData, chunkData + chunkLen);
+
+        FEIQ_LOG("[ImageRecv] chunk: id=" << imageId
+             << " chunkLen=" << chunkLen
+             << " accumulated=" << info.data.size()
+             << " totalSize=" << totalSize);
+
+        // 用 totalSize 精确判断是否收齐
+        if (totalSize > 0 && info.data.size() >= totalSize)
+        {
+            // 截断到 totalSize，最后一个 chunk 可能包含多余数据
+            if (info.data.size() > totalSize) {
+                FEIQ_LOG("[ImageRecv] 截断多余数据: id=" << imageId
+                     << " actual=" << info.data.size()
+                     << " totalSize=" << totalSize);
+                info.data.resize(totalSize);
+            }
+            completedInfo = std::move(info);
+            mImageChunks.erase(imageId);
+            mCompletedImageIds.insert(imageId); // 记录已完成，防止重传
+            completed = true;
+        }
+    }
+
+    if (completed) {
+        FEIQ_LOG("[ImageRecv] 图片接收完成: id=" << imageId
+             << " totalBytes=" << completedInfo.data.size()
+             << " expected=" << completedInfo.totalSize);
+        saveAndNotifyImage(completedInfo);
+
+        // 检查是否有其他图片超时
+        checkImageChunkTimeout();
+    }
+}
+
+void FeiqEngine::saveAndNotifyImage(const ImageChunkInfo& info)
+{
+    // 保存到 ~/.feiq/images/
+    // 文件名格式: <receiveTimestampMs>_<imageId>.jpg
+    // 不同时刻收到的同一张图片（同 imageId）不会相互覆盖
+    string homeDir = getenv("HOME") ? getenv("HOME") : "/tmp";
+    string imgDir = homeDir + "/.feiq/images";
+
+    // 创建目录（mkdir -p，后台线程调用）
+    mkdir((homeDir + "/.feiq").c_str(), 0755);
+    mkdir(imgDir.c_str(), 0755);
+
+    // 生成唯一文件名：毫秒时间戳 + imageId
+    auto nowMs = chrono::duration_cast<chrono::milliseconds>(
+                     chrono::system_clock::now().time_since_epoch()).count();
+    string fileName = to_string(nowMs) + "_" + info.imageId + ".jpg";
+    string savePath = imgDir + "/" + fileName;
+
+    const char* dataPtr = info.data.data();
+    size_t dataSize = info.data.size();
+
+    // 轻量校验：检查 JPEG 头尾标记（仅用于日志）
+    bool validJpeg = false;
+    if (dataSize >= 4) {
+        unsigned char h0 = (unsigned char)dataPtr[0];
+        unsigned char h1 = (unsigned char)dataPtr[1];
+        unsigned char t0 = (unsigned char)dataPtr[dataSize - 2];
+        unsigned char t1 = (unsigned char)dataPtr[dataSize - 1];
+        validJpeg = (h0 == 0xFF && h1 == 0xD8 && t0 == 0xFF && t1 == 0xD9);
+        FEIQ_LOG("[ImageRecv] JPEG校验: header=" << std::hex << (int)h0 << (int)h1
+             << " tail=" << (int)t0 << (int)t1
+             << " valid=" << std::dec << validJpeg
+             << " size=" << dataSize);
+    }
+
+    FILE* fp = fopen(savePath.c_str(), "wb");
+    if (!fp) {
+        FEIQ_LOG("[ImageRecv] 无法保存图片: " << savePath);
+        return;
+    }
+    size_t written = fwrite(dataPtr, 1, dataSize, fp);
+    fclose(fp);
+
+    FEIQ_LOG("[ImageRecv] 图片已保存: " << savePath
+         << " size=" << dataSize
+         << " written=" << written
+         << " validJpeg=" << validJpeg);
+
+    // 通过 ViewEvent 通知 UI 显示图片
+    auto event = make_shared<MessageViewEvent>();
+    event->when = Post::now();
+    event->fellow = info.from;
+
+    auto content = make_shared<ImageContent>();
+    content->imageId = info.imageId;
+    content->localPath = savePath;
+    event->contents.push_back(content);
+
+    // 记录到历史：contentText 存 fileName（含时间戳前缀），保证唯一
+    mHistory.addRecord(info.from->getIp(), info.from->getName(), info.from->getMac(),
+                       nowMs, false, static_cast<int>(ContentType::Image), fileName);
+
+    dispatchMsg(event);
+}
+
+void FeiqEngine::checkImageChunkTimeout()
+{
+    // 检查所有正在接收的图片，如果超过 5 秒没有收到新 chunk，
+    // 则认为传输中断，保存已接收的部分数据
+    auto now = chrono::duration_cast<chrono::milliseconds>(
+        chrono::system_clock::now().time_since_epoch()).count();
+
+    vector<ImageChunkInfo> timedOut;
+
+    {
+        lock_guard<mutex> lock(mImageChunkMutex);
+        vector<string> toRemove;
+
+        for (auto& kv : mImageChunks) {
+            auto& info = kv.second;
+            if (info.lastChunkTime > 0 && (now - info.lastChunkTime) > 5000) {
+                FEIQ_LOG("[ImageRecv] 图片接收超时: id=" << info.imageId
+                     << " received=" << info.data.size()
+                     << " expected=" << info.totalSize
+                     << " progress=" << (info.totalSize > 0 ? (int)(info.data.size() * 100 / info.totalSize) : 0) << "%");
+                timedOut.push_back(std::move(info));
+                toRemove.push_back(kv.first);
+                mCompletedImageIds.insert(kv.first);
+            }
+        }
+
+        for (auto& id : toRemove) {
+            mImageChunks.erase(id);
+        }
+    }
+
+    // 对超时的图片，保存已接收的部分数据（部分图片总比没有好）
+    for (auto& info : timedOut) {
+        if (!info.data.empty()) {
+            saveAndNotifyImage(info);
+        }
+    }
+}
+
 void FeiqEngine::onMsg(shared_ptr<Post> post)
 {
     static vector<string> rejectedImages;
@@ -869,34 +1334,13 @@ void FeiqEngine::onMsg(shared_ptr<Post> post)
         {
             auto fc = static_pointer_cast<FileContent>(*it);
 
-            if (fc->fileType == IPMSG_FILE_REGULAR)//TODO:与飞秋的文件夹传输协议还没支持
+            if (fc->fileType == IPMSG_FILE_REGULAR || fc->fileType == IPMSG_FILE_DIR)
                 mModel.addDownloadTask(event->fellow, fc);
-            else if (fc->fileType == IPMSG_FILE_DIR)
-            {
-                rejected=true;
-                reply+="Mac飞秋还不支持接收目录："+fc->filename+"\n";
-            }
-        }
-        else if ((*it)->type() == ContentType::Text)
-        {
-            auto tc = static_cast<TextContent*>((*it).get());
-            string begin = "/~#>";
-            string end = "<B~";
-            if (startsWith(tc->text, begin) && endsWith(tc->text, end))
-            {
-                rejected=true;
-            }
         }
         else if ((*it)->type() == ContentType::Image)
         {
-            //这个包还没被拒绝过，发送拒绝消息
-            auto ic = static_cast<ImageContent*>((*it).get());
-            if (std::find(rejectedImages.begin(), rejectedImages.end(), ic->id)==rejectedImages.end())
-            {
-                reply+="Mac飞秋还不支持接收图片，请用文件形式发送图片\n";
-                rejectedImages.push_back(ic->id);
-            }
-            rejected=true;
+            // 图片消息暂不支持内联显示，但保留消息让 UI 展示提示
+            // 不再自动回复拒绝消息
         }
 
         if (!rejected)
@@ -933,6 +1377,13 @@ void FeiqEngine::onMsg(shared_ptr<Post> post)
             case ContentType::Knock:
                 contentText = "[窗口抖动]";
                 break;
+            case ContentType::Image:
+            {
+                // 保存 packetNo_imageId 用于关联本地图片文件
+                auto ic = static_cast<ImageContent*>(c.get());
+                contentText = to_string(ic->packetNo) + "_" + ic->imageId;
+                break;
+            }
             default:
                 contentText = "";
                 break;
@@ -986,12 +1437,189 @@ void FeiqEngine::onReadMessage(shared_ptr<Post> post)
     mAsyncWait.clearWaitPack(content->id);
 }
 
-void FeiqEngine::fileServerHandler(unique_ptr<TcpSocket> client, int packetNo, int fileId, int offset)
+void FeiqEngine::fileServerHandler(unique_ptr<TcpSocket> client, int cmdId, int packetNo, int fileId, int offset)
 {
     auto task = mModel.findTask(packetNo, fileId);
     if (task == nullptr)
         return;
 
+    // 如果是目录请求 (IPMSG_GETDIRFILES = 0x62)，走目录上传逻辑
+    if (cmdId == IPMSG_GETDIRFILES)
+    {
+        auto func = [task](unique_ptr<TcpSocket> client){
+            task->setState(FileTaskState::Running);
+            string rootPath = task->getContent()->path;
+
+            // 递归发送目录结构的辅助 lambda
+            // 目录协议格式: header-size:filename:file-size:fileattr:\a
+            // 其中 \a = 0x07 = FILELIST_SEPARATOR
+            std::function<bool(const string&, TcpSocket*, FileTask*, int&)> sendDirRecursive;
+            sendDirRecursive = [&sendDirRecursive](const string& dirPath, TcpSocket* sock, FileTask* task, int& totalSent) -> bool
+            {
+                DIR* dir = opendir(dirPath.c_str());
+                if (dir == nullptr) return false;
+
+                char sep = HLIST_ENTRY_SEPARATOR;
+                struct dirent* entry;
+                while ((entry = readdir(dir)) != nullptr)
+                {
+                    if (task->hasCancelPending())
+                    {
+                        closedir(dir);
+                        return false;
+                    }
+
+                    string name = entry->d_name;
+                    if (name == "." || name == "..") continue;
+
+                    string fullPath = dirPath + "/" + name;
+                    struct stat st;
+                    if (stat(fullPath.c_str(), &st) != 0) continue;
+
+                    if (S_ISDIR(st.st_mode))
+                    {
+                        // 发送目录 header: headerSize:filename:fileSize:fileAttr:\a
+                        // fileSize 对目录来说是 0
+                        stringstream ss;
+                        ss << std::hex;
+                        // 先计算 header 内容（不含 headerSize 本身）
+                        stringstream innerSs;
+                        innerSs << std::hex;
+                        innerSs << name << sep << 0 << sep << IPMSG_FILE_DIR << sep;
+                        string inner = innerSs.str();
+                        // headerSize = inner.size() + headerSize 字段本身的长度 + 1(:)
+                        // 先用一个估计值
+                        int headerLen = inner.size();
+                        stringstream headerSizeSs;
+                        headerSizeSs << std::hex << (headerLen + 3); // 粗略估计 headerSize 字段约 2-3 字符
+                        string headerSizeStr = headerSizeSs.str();
+                        int actualHeaderLen = headerSizeStr.size() + 1 + inner.size(); // +1 for ':'
+                        // 重新计算
+                        stringstream finalSs;
+                        finalSs << std::hex << actualHeaderLen << sep << inner;
+                        string header = finalSs.str();
+                        header += FILELIST_SEPARATOR;
+
+                        int ret = sock->send(header.data(), header.size());
+                        if (ret < 0)
+                        {
+                            closedir(dir);
+                            return false;
+                        }
+
+                        // 递归进入子目录
+                        if (!sendDirRecursive(fullPath, sock, task, totalSent))
+                        {
+                            closedir(dir);
+                            return false;
+                        }
+
+                        // 发送返回上级 header: headerSize:.:0:IPMSG_FILE_RETPARENT:\a
+                        stringstream retSs;
+                        retSs << std::hex;
+                        stringstream retInner;
+                        retInner << std::hex;
+                        retInner << "." << sep << 0 << sep << IPMSG_FILE_RETPARENT << sep;
+                        string retInnerStr = retInner.str();
+                        int retHeaderLen = retInnerStr.size();
+                        stringstream retHdrSizeSs;
+                        retHdrSizeSs << std::hex << (retHeaderLen + 3);
+                        string retHdrSizeStr = retHdrSizeSs.str();
+                        int actualRetLen = retHdrSizeStr.size() + 1 + retInnerStr.size();
+                        stringstream retFinalSs;
+                        retFinalSs << std::hex << actualRetLen << sep << retInnerStr;
+                        string retHeader = retFinalSs.str();
+                        retHeader += FILELIST_SEPARATOR;
+
+                        ret = sock->send(retHeader.data(), retHeader.size());
+                        if (ret < 0)
+                        {
+                            closedir(dir);
+                            return false;
+                        }
+                    }
+                    else if (S_ISREG(st.st_mode))
+                    {
+                        // 发送文件 header: headerSize:filename:fileSize:fileAttr:\a
+                        long long fileSize = st.st_size;
+                        stringstream innerSs;
+                        innerSs << std::hex;
+                        innerSs << name << sep << fileSize << sep << IPMSG_FILE_REGULAR << sep;
+                        string inner = innerSs.str();
+                        int headerLen = inner.size();
+                        stringstream headerSizeSs;
+                        headerSizeSs << std::hex << (headerLen + 3);
+                        string headerSizeStr = headerSizeSs.str();
+                        int actualHeaderLen = headerSizeStr.size() + 1 + inner.size();
+                        stringstream finalSs;
+                        finalSs << std::hex << actualHeaderLen << sep << inner;
+                        string header = finalSs.str();
+                        header += FILELIST_SEPARATOR;
+
+                        int ret = sock->send(header.data(), header.size());
+                        if (ret < 0)
+                        {
+                            closedir(dir);
+                            return false;
+                        }
+
+                        // 发送文件数据
+                        FILE* fp = fopen(fullPath.c_str(), "r");
+                        if (fp == nullptr) continue;
+
+                        const int unitSize = 2048;
+                        std::array<char, 2048> buf;
+                        long long sent = 0;
+                        while (sent < fileSize && !feof(fp))
+                        {
+                            auto left = fileSize - sent;
+                            auto request = (long long)unitSize > left ? (int)left : unitSize;
+                            int got = fread(buf.data(), 1, request, fp);
+                            if (got <= 0) break;
+                            got = sock->send(buf.data(), got);
+                            if (got < 0)
+                            {
+                                fclose(fp);
+                                closedir(dir);
+                                return false;
+                            }
+                            sent += got;
+                            totalSent += got;
+                            task->setProcess(totalSent);
+                        }
+                        fclose(fp);
+                    }
+                    // 其他类型（symlink等）跳过
+                }
+
+                closedir(dir);
+                return true;
+            };
+
+            int totalSent = 0;
+            bool success = sendDirRecursive(rootPath, client.get(), task.get(), totalSent);
+
+            if (task->hasCancelPending())
+            {
+                task->setState(FileTaskState::Canceled);
+            }
+            else if (success)
+            {
+                task->setProcess(totalSent);
+                task->setState(FileTaskState::Finish);
+            }
+            else
+            {
+                task->setState(FileTaskState::Error, "目录发送失败，可能是网络问题");
+            }
+        };
+
+        thread thd(func, std::move(client));
+        thd.detach();
+        return;
+    }
+
+    // 普通文件上传
     auto func = [task, offset](unique_ptr<TcpSocket> client){
         FILE* is = fopen(task->getContent()->path.c_str(), "r");
         if (is == nullptr)

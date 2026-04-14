@@ -19,6 +19,7 @@ public:
     shared_ptr<Fellow> getFullInfoOf(shared_ptr<Fellow> fellow);
     shared_ptr<Fellow> findFirstFellowOf(const string& ip);
     list<shared_ptr<Fellow>> searchFellow(const string& text);
+    list<shared_ptr<Fellow>> allFellows();
     shared_ptr<Fellow> getShared(const Fellow* fellow);
 
 public:

@@ -59,45 +59,26 @@ void FellowListWidget::top(const Fellow &fellow)
     auto item = findFirstItem(fellow);
     if (item != nullptr)
     {
+        // 先把 Fellow 指针存好，takeItem 之后 widget 会被 Qt 自动删除，不能再访问
+        const Fellow* fellowPtr = getFellow(item);
+        if (!fellowPtr) fellowPtr = &fellow;
+
         int row = mWidget->row(item);
-        auto *widget = getItemWidget(item);
+        mWidget->takeItem(row);   // widget 在这里被 Qt 自动 delete
 
-        // takeItem 会解除 widget 关联，需要重新设置
-        mWidget->takeItem(row);
-
-        // 找到在线区域的起始位置（跳过分组 header）
-        int insertRow = 0;
-        for (int i = 0; i < mWidget->count(); i++)
-        {
-            if (!isGroupHeader(mWidget->item(i)))
-            {
-                insertRow = i;
-                break;
-            }
-            insertRow = i + 1;
-        }
-
-        mWidget->insertItem(insertRow, item);
+        mWidget->insertItem(0, item);  // 先临时插到头部（防止 requestRow 计算偏移错误）
         item->setSizeHint(QSize(0, 56));
-
-        if (widget)
-        {
-            // takeItem 后 widget 被自动删除，需要重建
-            auto *newWidget = createItemWidget(*(widget->fellow()));
-            mWidget->setItemWidget(item, newWidget);
-        }
-        else
-        {
-            auto *fellow_ptr = getFellow(item);
-            if (fellow_ptr)
-            {
-                auto *newWidget = createItemWidget(*fellow_ptr);
-                mWidget->setItemWidget(item, newWidget);
-            }
-        }
+        auto *newWidget = createItemWidget(*fellowPtr);
+        mWidget->setItemWidget(item, newWidget);
 
         mWidget->scrollToItem(item);
         mWidget->setCurrentItem(item);
+    }
+
+    // 重建分组 header（保证分组归属和计数正确）
+    if (mGroupEnabled)
+    {
+        rebuildGroupHeaders();
     }
 }
 
@@ -236,6 +217,17 @@ int FellowListWidget::requestRow(const Fellow &fellow)
 {
     if (mGroupEnabled)
     {
+        // 本机 Fellow 放在 self 分组末尾
+        if (fellow.isSelf())
+        {
+            auto *onlineHeader = findGroupHeader("online");
+            if (onlineHeader)
+                return mWidget->row(onlineHeader);
+            auto *offlineHeader = findGroupHeader("offline");
+            if (offlineHeader)
+                return mWidget->row(offlineHeader);
+            return mWidget->count();
+        }
         // 分组模式下：在线好友放在"在线好友"header 之后，离线好友放在"离线好友"header 之后
         if (fellow.isOnLine())
         {
@@ -311,68 +303,65 @@ int FellowListWidget::getOnlineSectionEnd()
 
 void FellowListWidget::rebuildGroupHeaders()
 {
-    // 统计在线和离线好友数量
-    int onlineCount = 0;
-    int offlineCount = 0;
+    // 第一步：从 item->data(Qt::UserRole) 收集所有 Fellow 指针（不依赖 widget）
+    std::vector<const Fellow*> selfFellows;   // 本机
+    std::vector<const Fellow*> onlineFellows;
+    std::vector<const Fellow*> offlineFellows;
 
     for (int i = 0; i < mWidget->count(); i++)
     {
         auto *item = mWidget->item(i);
         if (isGroupHeader(item)) continue;
-        auto *widget = getItemWidget(item);
-        if (widget && widget->fellow())
-        {
-            if (widget->fellow()->isOnLine())
-                onlineCount++;
-            else
-                offlineCount++;
-        }
-    }
-
-    // 先移除旧的分组 header
-    for (int i = mWidget->count() - 1; i >= 0; i--)
-    {
-        auto *item = mWidget->item(i);
-        if (isGroupHeader(item))
-        {
-            delete mWidget->takeItem(i);
-        }
-    }
-
-    // 收集所有好友项
-    struct FellowEntry {
-        QListWidgetItem* item;
-        FellowItemWidget* widget;
-        bool online;
-    };
-    std::vector<FellowEntry> entries;
-    for (int i = 0; i < mWidget->count(); i++)
-    {
-        auto *item = mWidget->item(i);
-        auto *widget = getItemWidget(item);
-        bool online = false;
-        if (widget && widget->fellow())
-            online = widget->fellow()->isOnLine();
-        entries.push_back({item, widget, online});
-    }
-
-    // 分离在线和离线
-    std::vector<FellowEntry> onlineEntries, offlineEntries;
-    for (auto& e : entries)
-    {
-        if (e.online)
-            onlineEntries.push_back(e);
+        const Fellow* f = getFellow(item);
+        if (!f) continue;
+        if (f->isSelf())
+            selfFellows.push_back(f);
+        else if (f->isOnLine())
+            onlineFellows.push_back(f);
         else
-            offlineEntries.push_back(e);
+            offlineFellows.push_back(f);
     }
 
-    // 清空列表（不删除 widget，因为 takeItem 后 widget 会被清除）
-    // 需要重新创建
+    // 第二步：清空列表（takeItem 会销毁关联的 widget，但 Fellow 指针来自模型，仍然有效）
     while (mWidget->count() > 0)
-        mWidget->takeItem(0);
+    {
+        auto *item = mWidget->takeItem(0);
+        delete item;
+    }
 
-    // 创建在线好友分组 header
-    if (true) // 始终显示在线分组
+    // 第三步：本机分组 header（只有本机时才显示）
+    if (!selfFellows.empty())
+    {
+        auto *selfHeader = new QListWidgetItem();
+        selfHeader->setData(GROUP_HEADER_ROLE, "self");
+        selfHeader->setSizeHint(QSize(0, 28));
+        selfHeader->setFlags(selfHeader->flags() & ~Qt::ItemIsSelectable);
+
+        auto *headerWidget = new QWidget();
+        headerWidget->setObjectName("groupHeaderWidget");
+        headerWidget->setFixedHeight(28);
+        auto *layout = new QHBoxLayout(headerWidget);
+        layout->setContentsMargins(12, 0, 12, 0);
+        auto *label = new QLabel("本机");
+        label->setObjectName("groupHeaderLabel");
+        layout->addWidget(label);
+        layout->addStretch();
+
+        mWidget->addItem(selfHeader);
+        mWidget->setItemWidget(selfHeader, headerWidget);
+
+        for (const Fellow* f : selfFellows)
+        {
+            auto *newItem = new QListWidgetItem();
+            newItem->setData(Qt::UserRole, QVariant::fromValue((void*)f));
+            newItem->setSizeHint(QSize(0, 56));
+            mWidget->addItem(newItem);
+            auto *newWidget = createItemWidget(*f);
+            mWidget->setItemWidget(newItem, newWidget);
+        }
+    }
+
+    // 第四步：创建在线好友分组 header
     {
         auto *onlineHeader = new QListWidgetItem();
         onlineHeader->setData(GROUP_HEADER_ROLE, "online");
@@ -384,7 +373,7 @@ void FellowListWidget::rebuildGroupHeaders()
         headerWidget->setFixedHeight(28);
         auto *layout = new QHBoxLayout(headerWidget);
         layout->setContentsMargins(12, 0, 12, 0);
-        auto *label = new QLabel(QString("在线好友 (%1)").arg(onlineCount));
+        auto *label = new QLabel(QString("在线好友 (%1)").arg(onlineFellows.size()));
         label->setObjectName("groupHeaderLabel");
         layout->addWidget(label);
         layout->addStretch();
@@ -393,22 +382,18 @@ void FellowListWidget::rebuildGroupHeaders()
         mWidget->setItemWidget(onlineHeader, headerWidget);
     }
 
-    // 添加在线好友
-    for (auto& e : onlineEntries)
+    // 第四步：添加在线好友
+    for (const Fellow* f : onlineFellows)
     {
         auto *newItem = new QListWidgetItem();
-        const Fellow* f = e.widget ? e.widget->fellow() : nullptr;
-        if (f)
-        {
-            newItem->setData(Qt::UserRole, QVariant::fromValue((void*)f));
-            newItem->setSizeHint(QSize(0, 56));
-            mWidget->addItem(newItem);
-            auto *newWidget = createItemWidget(*f);
-            mWidget->setItemWidget(newItem, newWidget);
-        }
+        newItem->setData(Qt::UserRole, QVariant::fromValue((void*)f));
+        newItem->setSizeHint(QSize(0, 56));
+        mWidget->addItem(newItem);
+        auto *newWidget = createItemWidget(*f);
+        mWidget->setItemWidget(newItem, newWidget);
     }
 
-    // 创建离线好友分组 header
+    // 第五步：创建离线好友分组 header
     {
         auto *offlineHeader = new QListWidgetItem();
         offlineHeader->setData(GROUP_HEADER_ROLE, "offline");
@@ -420,7 +405,7 @@ void FellowListWidget::rebuildGroupHeaders()
         headerWidget->setFixedHeight(28);
         auto *layout = new QHBoxLayout(headerWidget);
         layout->setContentsMargins(12, 0, 12, 0);
-        auto *label = new QLabel(QString("离线好友 (%1)").arg(offlineCount));
+        auto *label = new QLabel(QString("离线好友 (%1)").arg(offlineFellows.size()));
         label->setObjectName("groupHeaderLabel");
         layout->addWidget(label);
         layout->addStretch();
@@ -429,18 +414,14 @@ void FellowListWidget::rebuildGroupHeaders()
         mWidget->setItemWidget(offlineHeader, headerWidget);
     }
 
-    // 添加离线好友
-    for (auto& e : offlineEntries)
+    // 第六步：添加离线好友
+    for (const Fellow* f : offlineFellows)
     {
         auto *newItem = new QListWidgetItem();
-        const Fellow* f = e.widget ? e.widget->fellow() : nullptr;
-        if (f)
-        {
-            newItem->setData(Qt::UserRole, QVariant::fromValue((void*)f));
-            newItem->setSizeHint(QSize(0, 56));
-            mWidget->addItem(newItem);
-            auto *newWidget = createItemWidget(*f);
-            mWidget->setItemWidget(newItem, newWidget);
-        }
+        newItem->setData(Qt::UserRole, QVariant::fromValue((void*)f));
+        newItem->setSizeHint(QSize(0, 56));
+        mWidget->addItem(newItem);
+        auto *newWidget = createItemWidget(*f);
+        mWidget->setItemWidget(newItem, newWidget);
     }
 }

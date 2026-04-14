@@ -158,6 +158,8 @@
     <addaction name="actionSearchFellow"/>
     <addaction name="actionRefreshFellows"/>
     <addaction name="actionAddFellow"/>
+    <addaction name="separator"/>
+    <addaction name="actionBroadcast"/>
    </widget>
    <widget class="QMenu" name="settingMenu">
     <property name="title">
@@ -246,6 +248,11 @@
   <action name="actionPlugins">
    <property name="text">
     <string>插件管理</string>
+   </property>
+  </action>
+  <action name="actionBroadcast">
+   <property name="text">
+    <string>群发消息</string>
    </property>
   </action>
  </widget>

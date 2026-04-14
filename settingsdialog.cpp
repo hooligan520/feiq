@@ -43,11 +43,6 @@ void SettingsDialog::setupUI()
     mUserNameEdit->setMinimumHeight(30);
     userForm->addRow("用户名:", mUserNameEdit);
 
-    mHostNameEdit = new QLineEdit(userTab);
-    mHostNameEdit->setPlaceholderText("主机名/签名");
-    mHostNameEdit->setMinimumHeight(30);
-    userForm->addRow("主机名:", mHostNameEdit);
-
     userLayout->addWidget(userGroup);
 
     // 发送方式
@@ -125,7 +120,29 @@ void SettingsDialog::setupUI()
 
     tabWidget->addTab(netTab, "🌐 网络");
 
-    // --- Tab 3: 关于 ---
+    // --- Tab 3: 快捷回复 ---
+    auto *replyTab = new QWidget();
+    auto *replyLayout = new QVBoxLayout(replyTab);
+    replyLayout->setContentsMargins(24, 20, 24, 20);
+    replyLayout->setSpacing(12);
+
+    auto *replyGroup = new QGroupBox("快捷回复列表", replyTab);
+    auto *replyGroupLayout = new QVBoxLayout(replyGroup);
+    replyGroupLayout->setContentsMargins(16, 20, 16, 16);
+    replyGroupLayout->setSpacing(8);
+
+    auto *replyHint = new QLabel("每行一条快捷回复。输入框为空时点发送按钮可弹出菜单选择。", replyTab);
+    replyHint->setObjectName("settingsHintLabel");
+    replyHint->setWordWrap(true);
+    replyGroupLayout->addWidget(replyHint);
+
+    mQuickRepliesEdit = new QTextEdit(replyTab);
+    mQuickRepliesEdit->setPlaceholderText("好的 👍\n收到！\n稍等一下\n马上来\n在忙，等会回你");
+    replyGroupLayout->addWidget(mQuickRepliesEdit);
+
+    replyLayout->addWidget(replyGroup);
+
+    tabWidget->addTab(replyTab, "⚡ 快捷回复");
     auto *aboutTab = new QWidget();
     auto *aboutLayout = new QVBoxLayout(aboutTab);
     aboutLayout->setContentsMargins(24, 40, 24, 20);
@@ -190,7 +207,6 @@ void SettingsDialog::setupUI()
 void SettingsDialog::loadSettings()
 {
     mUserNameEdit->setText(mSettings->value("user/name", "").toString());
-    mHostNameEdit->setText(mSettings->value("user/host", "feiq by cy").toString());
     mCustomGroupEdit->setPlainText(mSettings->value("network/custom_group", "").toString());
 
     if (mSettings->value("app/send_by_enter", true).toBool())
@@ -203,6 +219,11 @@ void SettingsDialog::loadSettings()
     mEnableAutoReply->setChecked(mSettings->value("app/auto_reply_enable", false).toBool());
     mAutoReplyText->setPlainText(mSettings->value("app/auto_reply_text", "").toString());
     mAutoReplyText->setEnabled(mEnableAutoReply->isChecked());
+
+    // 快捷回复（默认内置常用回复）
+    static const QString defaultReplies =
+        "好的 👍\n收到！\n稍等一下\n马上来\n在忙，等会回你\n已处理，请查收";
+    mQuickRepliesEdit->setPlainText(mSettings->value("app/quick_replies", defaultReplies).toString());
 }
 
 void SettingsDialog::saveSettings()
@@ -216,12 +237,12 @@ void SettingsDialog::saveSettings()
     }
 
     mSettings->setValue("user/name", userName);
-    mSettings->setValue("user/host", mHostNameEdit->text().trimmed());
     mSettings->setValue("network/custom_group", mCustomGroupEdit->toPlainText().trimmed());
     mSettings->setValue("app/send_by_enter", mSendByEnter->isChecked());
     mSettings->setValue("app/enable_notify", mEnableNotify->isChecked());
     mSettings->setValue("app/auto_reply_enable", mEnableAutoReply->isChecked());
     mSettings->setValue("app/auto_reply_text", mAutoReplyText->toPlainText().trimmed());
+    mSettings->setValue("app/quick_replies", mQuickRepliesEdit->toPlainText());
     mSettings->sync();
 }
 

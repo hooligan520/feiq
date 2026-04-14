@@ -23,6 +23,8 @@ public:
     bool isOnLine() const{return mOnLine;}
     string version() const{return mVersion;}
     AbsenceStatus absenceStatus() const{return mAbsenceStatus;}
+    bool isSelf() const{return mIsSelf;}
+    void setIsSelf(bool v){mIsSelf = v;}
 
     void setIp(const string& value){
         mIp = value;
@@ -135,6 +137,7 @@ private:
     bool mOnLine = false;
     string mVersion;
     AbsenceStatus mAbsenceStatus = AbsenceStatus::Online;
+    bool mIsSelf = false;
 };
 
 #endif // FELLOW_H

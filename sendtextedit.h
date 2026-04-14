@@ -4,6 +4,7 @@
 #include <QTextEdit>
 #include <QList>
 #include <QFileInfo>
+#include <QPixmap>
 
 class SendTextEdit : public QTextEdit
 {
@@ -15,6 +16,7 @@ signals:
     void acceptDropFiles(QList<QFileInfo>);
     void ctrlEnterPressed();
     void enterPressed();
+    void pasteImage(QPixmap pixmap);  // 剪贴板粘贴图片
 
 public slots:
     void newLine();

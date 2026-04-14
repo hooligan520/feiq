@@ -50,6 +50,12 @@ list<shared_ptr<Fellow> > FeiqModel::searchFellow(const string &text)
     return fellows;
 }
 
+list<shared_ptr<Fellow> > FeiqModel::allFellows()
+{
+    lock_guard<mutex> guard(mFellowLock);
+    return mFellows;
+}
+
 shared_ptr<Fellow> FeiqModel::getShared(const Fellow *fellow)
 {
     if (fellow == nullptr)

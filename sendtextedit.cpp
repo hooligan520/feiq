@@ -4,6 +4,10 @@
 #include <QMimeData>
 #include <QFileInfo>
 #include <QDebug>
+#include <QApplication>
+#include <QClipboard>
+#include <QImage>
+#include <QPixmap>
 
 SendTextEdit::SendTextEdit(QWidget *parent)
     :QTextEdit(parent)
@@ -63,6 +67,25 @@ bool SendTextEdit::eventFilter(QObject *, QEvent * e)
         auto keyEvent = static_cast<QKeyEvent*>(e);
         auto enter = keyEvent->key() == Qt::Key_Return;
         auto ctrl  = keyEvent->modifiers() == Qt::ControlModifier;
+
+        // Cmd+V（macOS 上 ControlModifier = Command）且剪贴板有图片
+        if (keyEvent->key() == Qt::Key_V && ctrl)
+        {
+            auto *clipboard = QApplication::clipboard();
+            auto *mime = clipboard->mimeData();
+            if (mime && mime->hasImage())
+            {
+                QPixmap pix = qvariant_cast<QPixmap>(mime->imageData());
+                if (!pix.isNull())
+                {
+                    emit pasteImage(pix);
+                    return true;  // 拦截，不让 QTextEdit 把图片插入文本框
+                }
+            }
+            // 没有图片，走默认粘贴（粘贴文字）
+            return false;
+        }
+
         if (enter && ctrl)
         {
             emit ctrlEnterPressed();

@@ -39,6 +39,7 @@
 
 //飞秋的扩展协议
 #define IPMSG_OPEN_YOU  0x00000077//no extra
+#define IPMSG_SENDIMGMSG 0x00000078//含内联图片的文本消息（图片占位符 /~#>imageId<B~ + 文字）
 #define IPMSG_INPUTING  0x00000079//no extra。发送完消息也会跟一条，并且没有7a，why？
 #define IPMSG_INPUT_END 0x0000007a//no extra
 #define IPMSG_KNOCK     0x000000d1//窗口抖动

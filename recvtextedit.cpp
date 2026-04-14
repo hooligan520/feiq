@@ -3,11 +3,31 @@
 #include "emoji.h"
 #include <QMouseEvent>
 #include <QScrollBar>
+#include <QFileInfo>
+#include <QImage>
+#include <QUrl>
+#include <QPainter>
+#include <QPainterPath>
+#include <QFont>
+#include <QDir>
+#include <QRegExp>
+#include <QDebug>
+#include <QDateTime>
+#include <QTextCursor>
+#include <QTextBlock>
+#include <QTextBlockFormat>
+#include <QTextCharFormat>
 
 RecvTextEdit::RecvTextEdit(QWidget *parent)
     :QTextEdit(parent)
 {
     setTextInteractionFlags(Qt::LinksAccessibleByMouse|Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+}
+
+void RecvTextEdit::setMyInfo(const QString& name, const QString& ip)
+{
+    mMyName = name;
+    mMyIp = ip;
 }
 
 void RecvTextEdit::mousePressEvent(QMouseEvent *e)
@@ -26,12 +46,39 @@ void RecvTextEdit::mouseReleaseEvent(QMouseEvent *e)
     QTextEdit::mouseReleaseEvent(e);
 }
 
+void RecvTextEdit::scrollContentsBy(int dx, int dy)
+{
+    QTextEdit::scrollContentsBy(dx, dy);
+
+    // 检查是否滚动到了顶部
+    if (!mLoadingHistory && dy > 0) // dy > 0 表示向上滚动
+    {
+        auto *sb = verticalScrollBar();
+        if (sb && sb->value() <= 0)
+        {
+            emit scrolledToTop();
+        }
+    }
+}
+
 void RecvTextEdit::addFellowContent(const Content *content, long long msSinceEpoch)
 {
     addContent(content, msSinceEpoch, false);
 }
 
 void RecvTextEdit::addMyContent(const Content *content, long long msSinceEpoch)
+{
+    addContent(content, msSinceEpoch, true);
+}
+
+void RecvTextEdit::prependFellowContent(const Content *content, long long msSinceEpoch)
+{
+    // TODO: 在顶部插入内容 - 目前先用同样的 addContent
+    // 实际滚动加载在 ChatWindow 中通过重新渲染所有历史来实现
+    addContent(content, msSinceEpoch, false);
+}
+
+void RecvTextEdit::prependMyContent(const Content *content, long long msSinceEpoch)
 {
     addContent(content, msSinceEpoch, true);
 }
@@ -56,16 +103,28 @@ void RecvTextEdit::showTimestamp(long long msSinceEpoch)
             return; // 5分钟内不重复显示时间
     }
 
+    // 用 QTextCursor + QTextBlockFormat 来实现居中对齐（比 HTML table 可靠）
     moveCursor(QTextCursor::End);
-    QString html = QString(
-        "<div align=\"center\" style=\"margin: 12px 0 8px 0;\">"
-        "<span style=\"color: #999999; font-size: 11px; background-color: #F0F0F0; "
-        "padding: 2px 8px; border-radius: 4px;\">"
-        "%1"
-        "</span></div>"
-    ).arg(timeStr(msSinceEpoch));
-    insertHtml(html);
-    append("");
+    QTextCursor cursor = textCursor();
+    cursor.movePosition(QTextCursor::End);
+
+    // 插入新段落
+    cursor.insertBlock();
+
+    // 设置居中对齐
+    QTextBlockFormat blockFmt;
+    blockFmt.setAlignment(Qt::AlignCenter);
+    blockFmt.setTopMargin(8);
+    blockFmt.setBottomMargin(4);
+    cursor.setBlockFormat(blockFmt);
+
+    // 插入时间文本
+    QTextCharFormat charFmt;
+    charFmt.setForeground(QColor("#B0B0B0"));
+    charFmt.setFontPointSize(11);
+    cursor.insertText(friendlyTimeStr(msSinceEpoch), charFmt);
+
+    setTextCursor(cursor);
 }
 
 void RecvTextEdit::showBubble(const Content *content, long long msSinceEpoch, bool mySelf)
@@ -75,7 +134,7 @@ void RecvTextEdit::showBubble(const Content *content, long long msSinceEpoch, bo
     QString name;
     if (mySelf)
     {
-        name = "我";
+        name = mMyName.isEmpty() ? "我" : mMyName;
     }
     else
     {
@@ -84,61 +143,86 @@ void RecvTextEdit::showBubble(const Content *content, long long msSinceEpoch, bo
 
     QString contentHtml = contentToHtml(content, mySelf);
 
-    // 气泡样式
-    QString bubbleBgColor, bubbleTextColor, align, nameColor;
-    if (mySelf)
-    {
-        bubbleBgColor = "#95EC69";    // 微信绿
-        bubbleTextColor = "#000000";
-        nameColor = "#4A90D9";
-        align = "right";
-    }
-    else
-    {
-        bubbleBgColor = "#FFFFFF";
-        bubbleTextColor = "#333333";
-        nameColor = "#4CAF50";
-        align = "left";
-    }
-
-    // 构建气泡 HTML
-    // 用 table 实现左右对齐（QTextEdit 对 div float 支持有限）
-    QString html;
-    if (mySelf)
-    {
-        html = QString(
-            "<table width=\"100%%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\">"
-            "<tr><td align=\"right\">"
-            "<div style=\"display: inline-block; text-align: right; margin: 2px 4px 2px 60px;\">"
-            "<div style=\"font-size: 11px; color: %1; margin-bottom: 2px; text-align: right;\">%2</div>"
-            "<div style=\"background-color: %3; color: %4; padding: 8px 12px; "
-            "border-radius: 12px; border-top-right-radius: 4px; "
-            "display: inline-block; text-align: left; font-size: 13px;\">"
-            "%5</div>"
-            "</div>"
-            "</td></tr></table>"
-        ).arg(nameColor, name, bubbleBgColor, bubbleTextColor, contentHtml);
-    }
-    else
-    {
-        html = QString(
-            "<table width=\"100%%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\">"
-            "<tr><td align=\"left\">"
-            "<div style=\"display: inline-block; text-align: left; margin: 2px 60px 2px 4px;\">"
-            "<div style=\"font-size: 11px; color: %1; margin-bottom: 2px;\">%2</div>"
-            "<div style=\"background-color: %3; color: %4; padding: 8px 12px; "
-            "border-radius: 12px; border-top-left-radius: 4px; "
-            "display: inline-block; text-align: left; font-size: 13px;\">"
-            "%5</div>"
-            "</div>"
-            "</td></tr></table>"
-        ).arg(nameColor, name, bubbleBgColor, bubbleTextColor, contentHtml);
-    }
+    // 确保头像资源已注册
+    QString avatarUrl = ensureAvatarResource(mySelf);
 
     moveCursor(QTextCursor::End);
-    insertHtml(html);
-    append("");
+    QTextCursor cursor = textCursor();
+    cursor.movePosition(QTextCursor::End);
 
+    if (mySelf)
+    {
+        // === 自己的消息：右对齐 ===
+        // 第一行：名字 + 头像（右对齐）
+        cursor.insertBlock();
+        QTextBlockFormat rightFmt;
+        rightFmt.setAlignment(Qt::AlignRight);
+        rightFmt.setTopMargin(8);
+        rightFmt.setBottomMargin(0);
+        rightFmt.setRightMargin(16); // 留出滚动条空间
+        cursor.setBlockFormat(rightFmt);
+
+        QString nameHtml = QString(
+            "<span style=\"color: #999999; font-size: 12px;\">%1</span>"
+            " <img src=\"%2\" width=\"36\" height=\"36\" />"
+        ).arg(name, avatarUrl);
+        cursor.insertHtml(nameHtml);
+
+        // 第二行：气泡内容（右对齐 + 蓝色气泡 span 包裹）
+        cursor.insertBlock();
+        QTextBlockFormat bubbleFmt;
+        bubbleFmt.setAlignment(Qt::AlignRight);
+        bubbleFmt.setTopMargin(2);
+        bubbleFmt.setBottomMargin(4);
+        bubbleFmt.setRightMargin(16); // 留出滚动条空间
+        cursor.setBlockFormat(bubbleFmt);
+
+        // 用 span 背景包裹内容，紧凑贴合文字
+        QString bubbleHtml = QString(
+            "<span style=\"background-color: #0099FF; color: #FFFFFF; "
+            "padding: 8px 12px; border-radius: 8px; font-size: 13px; "
+            "display: inline-block;\">"
+            "%1</span>"
+        ).arg(contentHtml);
+        cursor.insertHtml(bubbleHtml);
+    }
+    else
+    {
+        // === 对方消息：左对齐 ===
+        // 第一行：头像 + 名字
+        cursor.insertBlock();
+        QTextBlockFormat leftFmt;
+        leftFmt.setAlignment(Qt::AlignLeft);
+        leftFmt.setTopMargin(8);
+        leftFmt.setBottomMargin(0);
+        cursor.setBlockFormat(leftFmt);
+
+        QString nameHtml = QString(
+            "<img src=\"%1\" width=\"36\" height=\"36\" />"
+            " <span style=\"color: #999999; font-size: 12px;\">%2</span>"
+        ).arg(avatarUrl, name);
+        cursor.insertHtml(nameHtml);
+
+        // 第二行：气泡内容（左对齐 + 白色气泡 span 包裹，缩进到头像右侧）
+        cursor.insertBlock();
+        QTextBlockFormat bubbleFmt;
+        bubbleFmt.setAlignment(Qt::AlignLeft);
+        bubbleFmt.setTopMargin(2);
+        bubbleFmt.setBottomMargin(4);
+        bubbleFmt.setLeftMargin(44); // 头像36px + 间距8px
+        cursor.setBlockFormat(bubbleFmt);
+
+        // 用 span 背景包裹内容，紧凑贴合文字
+        QString bubbleHtml = QString(
+            "<span style=\"background-color: #FFFFFF; color: #333333; "
+            "padding: 8px 12px; border-radius: 8px; font-size: 13px; "
+            "display: inline-block;\">"
+            "%1</span>"
+        ).arg(contentHtml);
+        cursor.insertHtml(bubbleHtml);
+    }
+
+    setTextCursor(cursor);
     mLastEdit = QDateTime::currentMSecsSinceEpoch();
 }
 
@@ -178,12 +262,28 @@ QString RecvTextEdit::fileToHtml(const FileContent *content, bool fromMySelf)
             sizeStr = QString::number(content->size) + " B";
 
         return QString(
-            "<div style=\"background-color: #F8F8F8; border: 1px solid #E0E0E0; "
+            "<div style=\"background-color: #F5F5F5; border: 1px solid #E8E8E8; "
             "border-radius: 8px; padding: 8px 12px; margin: 4px 0;\">"
-            "📄 <a href=\"%1\" style=\"color: #4A90D9; text-decoration: none;\">%2</a>"
-            "<br/><span style=\"color: #999999; font-size: 11px;\">%3</span>"
+            "📄 <a href=\"%1\" style=\"color: #576B95; text-decoration: none;\">%2</a>"
+            "<br/><span style=\"color: #B0B0B0; font-size: 11px;\">%3</span>"
             "</div>"
         ).arg(link, QString::fromStdString(content->filename), sizeStr);
+    }
+    else if (content->fileType == IPMSG_FILE_DIR)
+    {
+        // 文件夹卡片样式
+        QString link = QString("%1_%2_%3")
+            .arg(content->packetNo)
+            .arg(content->fileId)
+            .arg(fromMySelf ? "up" : "down");
+
+        return QString(
+            "<div style=\"background-color: #FFF8E1; border: 1px solid #FFE082; "
+            "border-radius: 8px; padding: 8px 12px; margin: 4px 0;\">"
+            "📁 <a href=\"%1\" style=\"color: #576B95; text-decoration: none;\">%2</a>"
+            "<br/><span style=\"color: #B0B0B0; font-size: 11px;\">文件夹</span>"
+            "</div>"
+        ).arg(link, QString::fromStdString(content->filename));
     }
     else
     {
@@ -193,13 +293,54 @@ QString RecvTextEdit::fileToHtml(const FileContent *content, bool fromMySelf)
 
 QString RecvTextEdit::imageToHtml(const ImageContent *content)
 {
-    Q_UNUSED(content);
-    return unsupportToHtml("对方发来图片，来图片，图片，片……额~还不支持!");
+    // 检查是否有本地图片文件可以显示
+    if (!content->localPath.empty())
+    {
+        QString filePath = QString::fromStdString(content->localPath);
+        QFileInfo fi(filePath);
+        if (fi.exists() && fi.size() > 0)
+        {
+            QImage image(filePath);
+            if (!image.isNull())
+            {
+                int maxWidth = 240;
+                int maxHeight = 240;
+                if (image.width() > maxWidth || image.height() > maxHeight)
+                    image = image.scaled(maxWidth, maxHeight, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+                QUrl imgUrl = QUrl::fromLocalFile(filePath);
+                document()->addResource(QTextDocument::ImageResource, imgUrl, image);
+
+                return QString("<img src=\"%1\" width=\"%2\" height=\"%3\" />")
+                    .arg(imgUrl.toString()).arg(image.width()).arg(image.height());
+            }
+        }
+        // 文件存在但无法读取
+        return "<span style=\"color: #B0B0B0;\">🖼 图片文件已丢失</span>";
+    }
+
+    // 没有本地路径，显示下载中
+    return "<span style=\"color: #B0B0B0;\">🖼 图片下载中...</span>";
 }
 
 QString RecvTextEdit::textToHtml(const TextContent *content)
 {
     auto str = QString::fromStdString(content->text);
+
+    // 先提取内联图片标记 \x01IMG:imageId\x01，避免被 toHtmlEscaped 破坏
+    // 用临时占位符替换，HTML 转义后再还原为 <img> 标签
+    QStringList imageIds;
+    QRegExp imgRx("\\x01IMG:([0-9a-fA-F]+)\\x01");
+    int offset = 0;
+    while ((offset = imgRx.indexIn(str, offset)) != -1)
+    {
+        QString imageId = imgRx.cap(1);
+        QString placeholder = QString("__FEIQ_IMG_%1__").arg(imageIds.size());
+        imageIds.append(imageId);
+        str.replace(offset, imgRx.matchedLength(), placeholder);
+        offset += placeholder.length();
+    }
+
     auto htmlStr = str.toHtmlEscaped();
     htmlStr.replace("\r\n", "<br>");
     htmlStr.replace("\r", "<br>");
@@ -213,6 +354,53 @@ QString RecvTextEdit::textToHtml(const TextContent *content)
          htmlStr.replace(emojiStr, imgTag);
     }
 
+    // 还原图片占位符为 <img> 标签
+    QString imgDir = QDir::homePath() + "/.feiq/images";
+    for (int i = 0; i < imageIds.size(); i++)
+    {
+        QString placeholder = QString("__FEIQ_IMG_%1__").arg(i);
+        QString imageId = imageIds[i];
+
+        // 查找 *_imageId.jpg（取最新的一个），兼容旧格式 imageId.jpg
+        QDir dir(imgDir);
+        QStringList filters;
+        filters << ("*_" + imageId + ".jpg");
+        auto matches = dir.entryList(filters, QDir::Files, QDir::Time); // Time=最新在前
+        // 兼容旧格式
+        if (matches.isEmpty()) filters << (imageId + ".jpg");
+        matches = dir.entryList(filters, QDir::Files, QDir::Time);
+        QString filePath = matches.isEmpty() ? "" : (imgDir + "/" + matches.first());
+
+        QString imgHtml;
+        if (!filePath.isEmpty()) {
+            QImage image(filePath);
+            if (!image.isNull())
+            {
+                int maxWidth = 240;
+                int maxHeight = 240;
+                if (image.width() > maxWidth || image.height() > maxHeight)
+                    image = image.scaled(maxWidth, maxHeight, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+                QUrl imgUrl = QUrl::fromLocalFile(filePath);
+                document()->addResource(QTextDocument::ImageResource, imgUrl, image);
+
+                imgHtml = QString("<img src=\"%1\" width=\"%2\" height=\"%3\" />")
+                    .arg(imgUrl.toString()).arg(image.width()).arg(image.height());
+            }
+            else
+            {
+                imgHtml = "<span style=\"color: #B0B0B0;\">🖼 图片加载失败</span>";
+            }
+        }
+        else
+        {
+            // 图片文件尚未下载完成，显示占位提示
+            imgHtml = QString("<span style=\"color: #B0B0B0;\">🖼 图片加载中... (%1)</span>").arg(imageId);
+        }
+
+        htmlStr.replace(placeholder, imgHtml);
+    }
+
     return htmlStr;
 }
 
@@ -220,9 +408,9 @@ QString RecvTextEdit::knockToHtml(const KnockContent *content, bool mySelf)
 {
     Q_UNUSED(content);
     if (mySelf)
-        return "<span style=\"color: #999999;\">👋 发送了一个窗口抖动</span>";
+        return "<span style=\"color: #B0B0B0;\">👋 发送了一个窗口抖动</span>";
     else
-        return "<span style=\"color: #999999;\">👋 发来窗口抖动</span>";
+        return "<span style=\"color: #B0B0B0;\">👋 发来窗口抖动</span>";
 }
 
 QString RecvTextEdit::unsupportToHtml(const QString &text)
@@ -255,13 +443,22 @@ void RecvTextEdit::setCurFellow(const Fellow *fellow)
 void RecvTextEdit::addWarning(const QString &warning)
 {
     moveCursor(QTextCursor::End);
-    QString html = QString(
-        "<div align=\"center\" style=\"margin: 8px 0;\">"
-        "<span style=\"color: #999999; font-size: 12px;\">"
-        "%1</span></div>"
-    ).arg(warning);
-    insertHtml(html);
-    append("");
+    QTextCursor cursor = textCursor();
+    cursor.movePosition(QTextCursor::End);
+    cursor.insertBlock();
+
+    QTextBlockFormat blockFmt;
+    blockFmt.setAlignment(Qt::AlignCenter);
+    blockFmt.setTopMargin(6);
+    blockFmt.setBottomMargin(6);
+    cursor.setBlockFormat(blockFmt);
+
+    QTextCharFormat charFmt;
+    charFmt.setForeground(QColor("#B0B0B0"));
+    charFmt.setFontPointSize(10);
+    cursor.insertText(warning, charFmt);
+
+    setTextCursor(cursor);
 }
 
 const Fellow *RecvTextEdit::curFellow()
@@ -282,18 +479,44 @@ void RecvTextEdit::parseLink(const QString &link)
     emit navigateToFileTask(packetNo, fileId, upload);
 }
 
-QString RecvTextEdit::timeStr(long long msSinceEpoch)
+QString RecvTextEdit::friendlyTimeStr(long long msSinceEpoch)
 {
     QDateTime time;
     time.setMSecsSinceEpoch(msSinceEpoch);
 
     QDateTime now = QDateTime::currentDateTime();
-    if (time.date() == now.date())
+    QDate today = now.date();
+    QDate msgDate = time.date();
+
+    if (msgDate == today)
+    {
+        // 当天：只显示时间
         return time.toString("HH:mm");
-    else if (time.date().year() == now.date().year())
-        return time.toString("MM-dd HH:mm");
+    }
+
+    QDate yesterday = today.addDays(-1);
+    if (msgDate == yesterday)
+    {
+        // 昨天
+        return "昨天 " + time.toString("HH:mm");
+    }
+
+    // 一周内（7天内）
+    int daysAgo = msgDate.daysTo(today);
+    if (daysAgo >= 2 && daysAgo <= 6)
+    {
+        static const char* weekdays[] = {
+            "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"
+        };
+        int dayOfWeek = msgDate.dayOfWeek(); // 1=Monday, 7=Sunday
+        return QString::fromUtf8(weekdays[dayOfWeek - 1]) + " " + time.toString("HH:mm");
+    }
+
+    // 更早：显示日期 + 时间
+    if (msgDate.year() == today.year())
+        return time.toString("M月d日 HH:mm");
     else
-        return time.toString("yyyy-MM-dd HH:mm");
+        return time.toString("yyyy年M月d日 HH:mm");
 }
 
 void RecvTextEdit::drawDaySeperatorIfNewDay(long long sinceEpoch)
@@ -309,16 +532,119 @@ void RecvTextEdit::drawDaySeperatorIfNewDay(long long sinceEpoch)
         if (last.daysTo(cur)>0)
         {
             moveCursor(QTextCursor::End);
+            QTextCursor cursor = textCursor();
+            cursor.movePosition(QTextCursor::End);
+            cursor.insertBlock();
+
+            QTextBlockFormat blockFmt;
+            blockFmt.setAlignment(Qt::AlignCenter);
+            blockFmt.setTopMargin(12);
+            blockFmt.setBottomMargin(6);
+            cursor.setBlockFormat(blockFmt);
+
+            QTextCharFormat charFmt;
+            charFmt.setForeground(QColor("#C0C0C0"));
+            charFmt.setFontPointSize(11);
             QString dateStr = cur.toString("yyyy年MM月dd日");
-            QString html = QString(
-                "<div align=\"center\" style=\"margin: 16px 0 8px 0;\">"
-                "<span style=\"color: #BBBBBB; font-size: 11px;\">—— %1 ——</span>"
-                "</div>"
-            ).arg(dateStr);
-            insertHtml(html);
-            append("");
+            cursor.insertText("—— " + dateStr + " ——", charFmt);
+
+            setTextCursor(cursor);
         }
     }
 
     mLastEdit = sinceEpoch;
+}
+
+// === 头像生成 ===
+
+QImage RecvTextEdit::generateAvatar(const QString& text, const QColor& bgColor, int size)
+{
+    QImage image(size, size, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+
+    // 画圆角矩形背景（QQ 风格）
+    QPainterPath path;
+    path.addRoundedRect(0, 0, size, size, 6, 6);
+    painter.fillPath(path, bgColor);
+
+    // 画文字
+    painter.setPen(Qt::white);
+    QFont font;
+    font.setPixelSize(size * 0.45);
+    font.setBold(true);
+    painter.setFont(font);
+    painter.drawText(QRect(0, 0, size, size), Qt::AlignCenter, text);
+
+    painter.end();
+    return image;
+}
+
+QString RecvTextEdit::getAvatarText(const QString& name)
+{
+    if (name.isEmpty())
+        return "?";
+    return name.left(1).toUpper();
+}
+
+QColor RecvTextEdit::getAvatarColor(const QString& ip)
+{
+    static const QColor colors[] = {
+        QColor("#4A90D9"),  // 蓝
+        QColor("#7B68EE"),  // 紫
+        QColor("#FF6B6B"),  // 红
+        QColor("#4ECDC4"),  // 青
+        QColor("#F39C12"),  // 橙
+        QColor("#2ECC71"),  // 绿
+        QColor("#E74C3C"),  // 深红
+        QColor("#9B59B6"),  // 深紫
+        QColor("#1ABC9C"),  // 绿松石
+        QColor("#E67E22"),  // 深橙
+    };
+
+    auto parts = ip.split('.');
+    int lastOctet = 0;
+    if (parts.size() == 4)
+        lastOctet = parts.last().toInt();
+
+    return colors[lastOctet % 10];
+}
+
+QString RecvTextEdit::ensureAvatarResource(bool mySelf)
+{
+    QString avatarKey;
+    QString name;
+    QString ip;
+
+    if (mySelf)
+    {
+        avatarKey = "avatar://my";
+        name = mMyName.isEmpty() ? "我" : mMyName;
+        ip = mMyIp;
+    }
+    else
+    {
+        QString fellowIp = mFellow ? QString::fromStdString(mFellow->getIp()) : "0.0.0.0";
+        avatarKey = "avatar://" + fellowIp;
+        name = mFellow ? QString::fromStdString(mFellow->getName()) : "匿名";
+        ip = fellowIp;
+    }
+
+    QUrl url(avatarKey);
+
+    // 检查是否已经注册过
+    QVariant existing = document()->resource(QTextDocument::ImageResource, url);
+    if (existing.isNull())
+    {
+        // 生成头像并注册
+        QString text = getAvatarText(name);
+        QColor color = getAvatarColor(ip);
+        QImage avatar = generateAvatar(text, color, 36);
+        document()->addResource(QTextDocument::ImageResource, url, avatar);
+    }
+
+    return avatarKey;
 }

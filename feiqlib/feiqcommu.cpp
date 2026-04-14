@@ -98,6 +98,7 @@ unique_ptr<TcpSocket> FeiqCommu::requestFileData(const string &ip,
     SendRequestFile requestSender;
     requestSender.packetNo = file.packetNo;
     requestSender.fileid = file.fileId;
+    requestSender.filetype = file.fileType;
     requestSender.offset = offset;
     auto request = pack(requestSender);
 
@@ -111,6 +112,41 @@ unique_ptr<TcpSocket> FeiqCommu::requestFileData(const string &ip,
 void FeiqCommu::setFileServerHandler(FileServerHandler fileServerHandler)
 {
     mFileServerHandler = fileServerHandler;
+}
+
+string FeiqCommu::packImageRequest(IdType packetNo, const string& imageId)
+{
+    // 构造 IPMSG_GETFILEDATA 请求包
+    // 格式: version:newPacketNo:name:host:cmdId:hexPacketNo:hexFileId:0:\0
+    char sep = HLIST_ENTRY_SEPARATOR;
+    auto newPacketNo = mPacketNo.get();
+    int cmdId = IPMSG_GETFILEDATA;
+
+    stringstream os;
+    os << mVersion << sep << newPacketNo << sep << mName << sep << mHost << sep << cmdId << sep;
+
+    // extra 区: packetNo:fileId:offset:
+    os << std::hex << packetNo << sep;
+
+    // imageId 可能是十六进制字符串或数字字符串
+    // 先尝试将其解析为数字再以十六进制写入
+    try {
+        long long fileIdNum = stoll(imageId, nullptr, 16);
+        os << std::hex << fileIdNum << sep;
+    } catch (...) {
+        // 如果解析失败，直接写入字符串
+        os << imageId << sep;
+    }
+    os << 0 << sep; // offset = 0
+    os.put(0);
+
+    os.seekg(0, os.end);
+    auto len = os.tellg();
+    os.seekg(0, os.beg);
+
+    string result(len, '\0');
+    os.read(&result[0], len);
+    return result;
 }
 
 void FeiqCommu::onRecv(const string &ip, vector<char> &data)
@@ -197,9 +233,10 @@ void FeiqCommu::onTcpClientConnected(int socket)
         int packetNo = stoi(values[0], 0, 16);
         int fileId = stoi(values[1], 0, 16);
         int offset = stoi(values[2], 0, 16);
+        int cmdId = post.cmdId & 0xFF; // 低8位是命令字
 
         //处理请求
-        mFileServerHandler(std::move(client), packetNo, fileId, offset);
+        mFileServerHandler(std::move(client), cmdId, packetNo, fileId, offset);
     }
 }
 

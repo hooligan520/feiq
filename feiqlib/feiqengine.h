@@ -7,6 +7,8 @@
 #include <tuple>
 #include <list>
 #include <unordered_map>
+#include <unordered_set>
+#include <mutex>
 #include "feiqmodel.h"
 #include "msgqueuethread.h"
 #include "ifeiqview.h"
@@ -30,6 +32,7 @@ public:
     pair<bool, string> send(shared_ptr<Fellow> fellow, shared_ptr<Content> content);
     pair<bool, string> sendFiles(shared_ptr<Fellow> fellow, list<shared_ptr<FileContent> > &files);
     bool downloadFile(FileTask* task);
+    bool downloadDir(FileTask* task);
 
 public:
     pair<bool, string> start();
@@ -50,6 +53,7 @@ public:
 
 public:
     FeiqModel &getModel();
+    FeiqCommu &getCommu() { return mCommu; }
     History &getHistory() { return mHistory; }
     void initHistory(const string& dbPath);
 
@@ -65,7 +69,7 @@ private://trigers
     void onReadMessage(shared_ptr<Post> post);
 
 private:
-    void fileServerHandler(unique_ptr<TcpSocket> client, int packetNo, int fileId, int offset);
+    void fileServerHandler(unique_ptr<TcpSocket> client, int cmdId, int packetNo, int fileId, int offset);
 
 private:
     shared_ptr<Fellow> addOrUpdateFellow(shared_ptr<Fellow> fellow);
@@ -87,6 +91,25 @@ private:
     bool mAutoReplyEnabled = false;
     string mAutoReplyText;
     AsynWait mAsyncWait;//异步等待对方回包
+
+    // 图片分片缓存（UDP 内联图片协议）
+    struct ImageChunkInfo {
+        string imageId;           // 图片 ID（十六进制字符串）
+        size_t totalSize = 0;     // 图片总大小（十进制）
+        vector<char> data;        // 已收集的图片数据
+        shared_ptr<Fellow> from;  // 发送者
+        long long lastChunkTime = 0; // 最后一个 chunk 的时间戳（ms）
+    };
+    mutex mImageChunkMutex;
+    unordered_map<string, ImageChunkInfo> mImageChunks; // key = imageId
+    unordered_set<string> mCompletedImageIds; // 已完成的 imageId，忽略重传
+public:
+    // 处理图片分片（由 RecvImage 调用）
+    void handleImageChunk(const string& imageId, size_t totalSize, int width, int height,
+                         const char* chunkData, size_t chunkLen, shared_ptr<Fellow> from);
+private:
+    void saveAndNotifyImage(const ImageChunkInfo& info);
+    void checkImageChunkTimeout(); // 定时检查超时未完成的图片
 
     struct EnumClassHash
     {

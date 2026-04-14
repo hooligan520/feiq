@@ -10,12 +10,16 @@
 #include <QMenu>
 #include <QtMac>
 #include <QNetworkInterface>
+#include <QSysInfo>
+#include <sys/stat.h>
 #include "addfellowdialog.h"
+#include "broadcastdialog.h"
 #include "platformdepend.h"
 #include "feiqwin.h"
 #include "fellowitemwidget.h"
 #include "settingsdialog.h"
 #include "plugin/iplugin.h"
+#include "feiqlib/logger.h"
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
@@ -26,8 +30,17 @@ MainWindow::MainWindow(QWidget *parent) :
 
     connect(this, SIGNAL(showErrorAndQuit(QString)), this, SLOT(onShowErrorAndQuit(QString)));
 
-    //加载配置
-    auto settingFilePath = QDir::home().filePath(".feiq_setting.ini");
+    // 确保 ~/.feiq 目录存在
+    QString feiqDir = QDir::home().filePath(".feiq");
+    QDir().mkpath(feiqDir);
+
+    //加载配置（路径迁移到 ~/.feiq/setting.ini）
+    auto settingFilePath = feiqDir + "/setting.ini";
+    // 旧路径兼容迁移
+    QString oldSettingPath = QDir::home().filePath(".feiq_setting.ini");
+    if (QFile::exists(oldSettingPath) && !QFile::exists(settingFilePath)) {
+        QFile::copy(oldSettingPath, settingFilePath);
+    }
     mSettings = new Settings(settingFilePath, QSettings::IniFormat);
     mSettings->setIniCodec(QTextCodec::codecForName("UTF-8"));
     mTitle = mSettings->value("app/title", "飞秋").toString();
@@ -126,6 +139,7 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(ui->actionSettings, SIGNAL(triggered(bool)), this, SLOT(openSettings()));
     connect(ui->actionOpendl, SIGNAL(triggered(bool)), this, SLOT(openDownloadDlg()));
     connect(ui->actionPlugins, SIGNAL(triggered(bool)), this, SLOT(openPlugins()));
+    connect(ui->actionBroadcast, SIGNAL(triggered(bool)), this, SLOT(openBroadcast()));
 
     //初始化状态菜单（互斥选择）
     auto *statusGroup = new QActionGroup(this);
@@ -392,6 +406,12 @@ void MainWindow::openPlugins()
     dlg.exec();
 }
 
+void MainWindow::openBroadcast()
+{
+    BroadcastDialog dlg(&mFeiq, this);
+    dlg.exec();
+}
+
 void MainWindow::openDownloadDlg()
 {
     mDownloadFileDlg->show();
@@ -465,8 +485,19 @@ void MainWindow::initFeiq()
         return;
     }
 
+    // 初始化日志系统（默认关闭，配置文件中 app/debug_log=true 开启）
+    bool logEnabled = mSettings->value("app/debug_log", false).toBool();
+    if (logEnabled) {
+        QString feiqDir = QDir::home().filePath(".feiq");
+        QString logPath = feiqDir + "/feiq.log";
+        Logger::instance().init(logPath.toStdString(), true);
+    }
+
     mFeiq.setMyName(name.toStdString());
-    mFeiq.setMyHost(mSettings->value("user/host","feiq by cy").toString().toStdString());
+    // host 自动使用系统主机名
+    QString hostName = QSysInfo::machineHostName();
+    if (hostName.isEmpty()) hostName = "feiq-mac";
+    mFeiq.setMyHost(hostName.toStdString());
 
     auto customGrroup = mSettings->value("network/custom_group", "").toString();
     if (!customGrroup.isEmpty())
@@ -488,9 +519,34 @@ void MainWindow::initFeiq()
 
     mFeiq.setView(this);
 
-    // 初始化聊天记录数据库
-    auto historyPath = QDir::home().filePath(".feiq_history.db");
+    // 初始化聊天记录数据库（路径迁移到 ~/.feiq/history.db）
+    QString feiqDir = QDir::home().filePath(".feiq");
+    QString historyPath = feiqDir + "/history.db";
+    // 旧路径兼容迁移
+    QString oldHistoryPath = QDir::home().filePath(".feiq_history.db");
+    if (QFile::exists(oldHistoryPath) && !QFile::exists(historyPath)) {
+        QFile::copy(oldHistoryPath, historyPath);
+    }
     mFeiq.initHistory(historyPath.toStdString());
+
+    // 加载有聊天记录的历史好友（离线状态展示在好友列表）
+    auto historyFellows = mFeiq.getHistory().queryAllFellows();
+    for (auto& hf : historyFellows) {
+        // 如果模型中还没有这个好友（未上线），则添加为离线好友
+        if (!mFeiq.getModel().findFirstFellowOf(hf.ip)) {
+            auto fellow = make_shared<Fellow>();
+            fellow->setIp(hf.ip);
+            fellow->setName(hf.name);
+            fellow->setMac(hf.mac);
+            fellow->setOnLine(false);
+            mFeiq.getModel().addFellow(fellow);
+            // 通知 UI（在主线程中更新）
+            auto event = make_shared<FellowViewEvent>();
+            event->what = ViewEventType::FELLOW_UPDATE;
+            event->fellow = fellow;
+            emit feiqViewEvent(event);
+        }
+    }
 
     mFeiq.enableIntervalDetect(60);
 
@@ -509,6 +565,23 @@ void MainWindow::initFeiq()
     if (!ret.first)
     {
         emit showErrorAndQuit(ret.second.c_str());
+        return;
+    }
+
+    // 构建本机 Fellow 并推到 UI（在线、本机分组）
+    {
+        auto localIp = getLocalIp();
+        mSelfFellow = make_shared<Fellow>();
+        mSelfFellow->setIp(localIp.toStdString());
+        mSelfFellow->setName(name.toStdString());
+        mSelfFellow->setHost(hostName.toStdString());
+        mSelfFellow->setOnLine(true);
+        mSelfFellow->setIsSelf(true);
+        mFeiq.getModel().addFellow(mSelfFellow);
+        auto event = make_shared<FellowViewEvent>();
+        event->what = ViewEventType::FELLOW_UPDATE;
+        event->fellow = mSelfFellow;
+        emit feiqViewEvent(event);
     }
 
     qDebug()<<"feiq started";

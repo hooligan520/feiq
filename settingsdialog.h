@@ -33,7 +33,6 @@ private:
 
     // 用户设置
     QLineEdit* mUserNameEdit;
-    QLineEdit* mHostNameEdit;
 
     // 网络设置
     QTextEdit* mCustomGroupEdit;
@@ -48,6 +47,9 @@ private:
     // 自动应答
     QCheckBox* mEnableAutoReply;
     QTextEdit* mAutoReplyText;
+
+    // 快捷回复
+    QTextEdit* mQuickRepliesEdit;
 
     // 按钮
     QPushButton* mSaveBtn;

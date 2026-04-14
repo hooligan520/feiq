@@ -73,6 +73,7 @@ private slots:
     void onChatWindowClosed(const Fellow* fellow);
     void setMyStatus(AbsenceStatus status);
     void openPlugins();
+    void openBroadcast();
 
 private:
     void userAddFellow(QString ip);
@@ -116,6 +117,9 @@ private:
 
     // 聊天窗口管理
     unordered_map<const Fellow*, ChatWindow*> mChatWindows;
+
+    // 本机 Fellow（本机分组展示）
+    shared_ptr<Fellow> mSelfFellow;
 };
 
 #endif // MAINWINDOW_H

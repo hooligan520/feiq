@@ -174,14 +174,14 @@ QToolBar#chatToolBar QToolButton:pressed {
     background-color: #D0D0D0;
 }
 
-/* === 消息显示区 === */
+/* === 消息显示区 (QQ 风格灰色背景) === */
 QTextEdit#recvEdit {
-    background-color: #FFFFFF;
+    background-color: #EDEDED;
     border: none;
     padding: 8px;
-    font-size: 13px;
+    font-size: 14px;
     color: #333333;
-    line-height: 1.5;
+    line-height: 1.6;
 }
 
 /* === 输入区域 === */
